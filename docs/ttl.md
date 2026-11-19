@@ -9,4 +9,6 @@ RampSpec assumes five-second ledgers for human-readable estimates. Ledger counts
 
 Every relevant write extends its state. The operator maintenance service must inspect and refresh live entries at least every 30 days using `maintain_attestor` and `maintain_evidence`; calls are administrator-authorized and fail for unknown entries. Evidence maintenance also refreshes the active uniqueness index or forward supersession link where applicable.
 
+Use administrator-authorized `maintain_supersession_chain` with the first superseded record to refresh every evidence record and forward link through the terminal successor to at least the 180-day target. The operation validates the complete forward chain, including each successor record and its backlink, before changing any TTL. It rejects missing records, incomplete links, and chains longer than 23 links without TTL changes or events. Restore archived records and links before maintenance.
+
 Maintenance cannot restore an archived entry from inside the contract. Operators must submit the network restore-footprint transaction first, then call maintenance. Contract events and signed release/deployment manifests are the recovery source if an indexer cache is lost. Alert at 45 days remaining, escalate at 30 days, and freeze new publication if the instance drops below 14 days without a successful extension.

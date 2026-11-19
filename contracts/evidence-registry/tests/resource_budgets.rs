@@ -70,3 +70,19 @@ fn long_replacement_chain_stays_within_reviewed_budget() {
 
     assert_budget(&env, 30_000_000, 24_000_000);
 }
+
+#[test]
+fn maximum_supersession_chain_maintenance_stays_within_reviewed_budget() {
+    let (env, contract_id, publisher) = setup();
+    let client = EvidenceRegistryClient::new(&env, &contract_id);
+    let mut current = client.publish_evidence(&input(&env, &publisher, 1));
+    let first = current.clone();
+    for marker in 2..=24 {
+        current = client.supersede_evidence(&current, &input(&env, &publisher, marker), &publisher);
+    }
+    env.cost_estimate().budget().reset_tracker();
+
+    client.maintain_supersession_chain(&first);
+
+    assert_budget(&env, 80_000_000, 64_000_000);
+}

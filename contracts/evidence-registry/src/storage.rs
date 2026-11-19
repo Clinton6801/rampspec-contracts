@@ -3,6 +3,8 @@ use rampspec_shared_types::{
 };
 use soroban_sdk::{Address, BytesN, Env};
 
+use crate::supersession;
+
 pub(crate) const INSTANCE_TTL_THRESHOLD: u32 = 103_680;
 pub(crate) const INSTANCE_TTL_TARGET: u32 = 2_073_600;
 pub(crate) const PERSISTENT_TTL_THRESHOLD: u32 = 518_400;
@@ -18,6 +20,12 @@ fn extend_persistent_ttl(env: &Env, key: &PersistentKeyV1) {
     env.storage()
         .persistent()
         .extend_ttl(key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_TARGET);
+}
+
+fn extend_persistent_ttl_to_target(env: &Env, key: &PersistentKeyV1) {
+    env.storage()
+        .persistent()
+        .extend_ttl(key, PERSISTENT_TTL_TARGET, PERSISTENT_TTL_TARGET);
 }
 
 pub(crate) fn is_initialized(env: &Env) -> bool {
@@ -197,6 +205,25 @@ pub(crate) fn maintain_evidence(env: &Env, id: &BytesN<32>) -> Result<(), Contra
     if superseded_by(env, id).is_some() {
         extend_persistent_ttl(env, &PersistentKeyV1::SupersededBy(id.clone()));
     }
+    extend_instance_ttl(env);
+    Ok(())
+}
+
+pub(crate) fn maintain_supersession_chain(
+    env: &Env,
+    first_id: &BytesN<32>,
+) -> Result<(), ContractError> {
+    let chain_length = supersession::maintenance_chain_length(env, first_id)?;
+    let mut current_id = first_id.clone();
+
+    for _ in 0..chain_length {
+        extend_persistent_ttl_to_target(env, &PersistentKeyV1::Evidence(current_id.clone()));
+        let next_id = superseded_by(env, &current_id).ok_or(ContractError::InvalidSupersession)?;
+        extend_persistent_ttl_to_target(env, &PersistentKeyV1::SupersededBy(current_id.clone()));
+        current_id = next_id;
+    }
+
+    extend_persistent_ttl_to_target(env, &PersistentKeyV1::Evidence(current_id));
     extend_instance_ttl(env);
     Ok(())
 }
