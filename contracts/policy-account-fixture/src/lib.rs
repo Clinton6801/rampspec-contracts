@@ -14,6 +14,8 @@ use soroban_sdk::{
 };
 
 const MAX_SIGNERS: u32 = 16;
+const MIN_AUTHENTICATOR_DATA_LENGTH: u32 = 37;
+const MAX_AUTHENTICATOR_DATA_LENGTH: u32 = 512;
 
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -395,8 +397,8 @@ impl CustomAccountInterface for PolicyAccountFixture {
                         return Err(PolicyError::WrongSignatureMode);
                     };
                     if signature.challenge != payload_hash
-                        || signature.authenticator_data.len() < 37
-                        || signature.authenticator_data.len() > 512
+                        || signature.authenticator_data.len() < MIN_AUTHENTICATOR_DATA_LENGTH
+                        || signature.authenticator_data.len() > MAX_AUTHENTICATOR_DATA_LENGTH
                     {
                         return Err(PolicyError::InvalidPasskey);
                     }
@@ -482,7 +484,19 @@ mod tests {
     }
 
     fn passkey_signature(env: &Env, key: &P256SigningKey, payload: &[u8; 32]) -> AccountSignature {
-        let authenticator_data = Bytes::from_array(env, &[0xA5; 37]);
+        passkey_signature_with_authenticator_length(env, key, payload, 37)
+    }
+
+    fn passkey_signature_with_authenticator_length(
+        env: &Env,
+        key: &P256SigningKey,
+        payload: &[u8; 32],
+        authenticator_data_length: u32,
+    ) -> AccountSignature {
+        let mut authenticator_data = Bytes::new(env);
+        for _ in 0..authenticator_data_length {
+            authenticator_data.push_back(0xA5);
+        }
         let client_data_hash = [0xB6; 32];
         let mut signed_message = authenticator_data.clone();
         signed_message.append(&Bytes::from_array(env, &client_data_hash));
@@ -894,5 +908,62 @@ mod tests {
             check(&env, &contract_id, &payload, &vec![&env, altered]),
             Err(Ok(PolicyError::InvalidPasskey))
         );
+    }
+
+    #[test]
+    fn passkey_authenticator_data_enforces_exact_bounds_before_replay() {
+        let env = Env::default();
+        let bootstrap = key(1);
+        let bootstrap_signers = vec![&env, signer(&env, &bootstrap, 1)];
+        let passkey = passkey_key(3);
+        let passkeys = vec![&env, passkey_signer(&env, &passkey, 1)];
+        env.mock_all_auths();
+        let contract_id = env.register(PolicyAccountFixture, ());
+        let admin = Address::generate(&env);
+        let client = PolicyAccountFixtureClient::new(&env, &contract_id);
+        client.initialize(&admin, &bootstrap_signers, &1);
+        client.set_passkeys(&passkeys, &1);
+        let config_before = client.config();
+
+        for (marker, length) in [(21_u8, 36_u32), (22, 513)] {
+            let payload = [marker; 32];
+            let bounded =
+                passkey_signature_with_authenticator_length(&env, &passkey, &payload, length);
+            assert_eq!(
+                check(&env, &contract_id, &payload, &vec![&env, bounded]),
+                Err(Ok(PolicyError::InvalidPasskey))
+            );
+            assert_eq!(client.config(), config_before);
+            assert_eq!(
+                check(
+                    &env,
+                    &contract_id,
+                    &payload,
+                    &vec![
+                        &env,
+                        passkey_signature_with_authenticator_length(&env, &passkey, &payload, 37,),
+                    ],
+                ),
+                Ok(())
+            );
+        }
+
+        for (marker, length) in [(23_u8, 37_u32), (24, 512)] {
+            let payload = [marker; 32];
+            assert_eq!(
+                check(
+                    &env,
+                    &contract_id,
+                    &payload,
+                    &vec![
+                        &env,
+                        passkey_signature_with_authenticator_length(
+                            &env, &passkey, &payload, length,
+                        ),
+                    ],
+                ),
+                Ok(())
+            );
+        }
     }
 }

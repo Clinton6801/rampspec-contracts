@@ -15,7 +15,8 @@ pub(crate) fn validate_link(
     }
 
     let mut cursor = new_id.clone();
-    for _ in 0..MAX_CHAIN_LENGTH {
+    // Include the terminal lookup so exactly MAX_CHAIN_LENGTH links are valid.
+    for _ in 0..=MAX_CHAIN_LENGTH {
         if cursor == *old_id {
             return Err(ContractError::InvalidSupersession);
         }

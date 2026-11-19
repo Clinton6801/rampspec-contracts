@@ -939,6 +939,103 @@ mod tests {
     }
 
     #[test]
+    fn supersession_chain_limit_accepts_23_and_24_links_but_rejects_25() {
+        for link_count in [23_u8, 24] {
+            let (env, contract_id, admin) = setup();
+            let publisher = register_publisher(&env, &contract_id, &admin);
+            let client = EvidenceRegistryClient::new(&env, &contract_id);
+            let old_id = client.publish_evidence(&valid_input(&env, &publisher));
+            let mut replacement = valid_input(&env, &publisher);
+            replacement.report_hash = BytesN::from_array(&env, &[50; 32]);
+            let new_id = evidence_id::derive(
+                &env,
+                &replacement.publisher,
+                &replacement.report_hash,
+                &replacement.network,
+            );
+            env.as_contract(&contract_id, || {
+                let mut cursor = new_id.clone();
+                for marker in 1..=link_count {
+                    let next = BytesN::from_array(&env, &[100 + marker; 32]);
+                    storage::set_superseded_by(&env, &cursor, &next);
+                    cursor = next;
+                }
+            });
+
+            assert_eq!(
+                client.supersede_evidence(&old_id, &replacement, &publisher),
+                new_id
+            );
+        }
+
+        let (env, contract_id, admin) = setup();
+        let publisher = register_publisher(&env, &contract_id, &admin);
+        let client = EvidenceRegistryClient::new(&env, &contract_id);
+        let original = valid_input(&env, &publisher);
+        let old_id = client.publish_evidence(&original);
+        let mut replacement = valid_input(&env, &publisher);
+        replacement.report_hash = BytesN::from_array(&env, &[51; 32]);
+        let new_id = evidence_id::derive(
+            &env,
+            &replacement.publisher,
+            &replacement.report_hash,
+            &replacement.network,
+        );
+        let (old_before, old_ttl_before, active_before, links_before) =
+            env.as_contract(&contract_id, || {
+                let mut cursor = new_id.clone();
+                let mut links = soroban_sdk::Vec::new(&env);
+                for marker in 1..=25_u8 {
+                    let next = BytesN::from_array(&env, &[100 + marker; 32]);
+                    storage::set_superseded_by(&env, &cursor, &next);
+                    links.push_back((cursor, next.clone()));
+                    cursor = next;
+                }
+                (
+                    storage::evidence(&env, &old_id).unwrap(),
+                    env.storage().persistent().get_ttl(
+                        &rampspec_shared_types::PersistentKeyV1::Evidence(old_id.clone()),
+                    ),
+                    storage::active_id(
+                        &env,
+                        &original.publisher,
+                        &original.report_hash,
+                        &original.network,
+                    ),
+                    links,
+                )
+            });
+
+        assert_eq!(
+            client.try_supersede_evidence(&old_id, &replacement, &publisher),
+            Err(Ok(ContractError::InvalidSupersession))
+        );
+        env.as_contract(&contract_id, || {
+            assert_eq!(storage::evidence(&env, &old_id), Some(old_before));
+            assert_eq!(storage::evidence(&env, &new_id), None);
+            assert_eq!(
+                storage::active_id(
+                    &env,
+                    &original.publisher,
+                    &original.report_hash,
+                    &original.network,
+                ),
+                active_before
+            );
+            assert_eq!(
+                env.storage()
+                    .persistent()
+                    .get_ttl(&rampspec_shared_types::PersistentKeyV1::Evidence(old_id)),
+                old_ttl_before
+            );
+            for (source, target) in links_before {
+                assert_eq!(storage::superseded_by(&env, &source), Some(target));
+            }
+        });
+        assert_eq!(env.events().all().events().len(), 0);
+    }
+
+    #[test]
     fn rejects_a_second_forward_link_even_if_source_state_is_corrupt() {
         let (env, contract_id, admin) = setup();
         let publisher = register_publisher(&env, &contract_id, &admin);

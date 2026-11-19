@@ -10,6 +10,6 @@ The fixture release boundary is enforced by `fixtures/manifest.json` and CI:
 - fixture WASM must expose `is_test_only` and its expected authentication entrypoint;
 - custody, token, upgrade, and production evidence-publication entrypoints are forbidden.
 
-The web-auth fixture follows the pinned SEP-45 draft 0.1.1 `web_auth_verify(Map<Symbol, String>)` shape and has no contract sub-invocations. The policy-account fixture implements Soroban `__check_auth` for controlled Ed25519 and passkey-compatible tests. Passkey mode checks the P-256 assertion signature and binds it to the authorization payload, but it does not replace browser verification of origin, RP ID, user presence, or attestation.
+The web-auth fixture follows the pinned SEP-45 draft 0.1.1 `web_auth_verify(Map<Symbol, String>)` shape and has no contract sub-invocations. The policy-account fixture implements Soroban `__check_auth` for controlled Ed25519 and passkey-compatible tests. Passkey mode accepts authenticator data from 37 through 512 bytes, rejects inputs outside those bounds before cryptographic work or replay storage, checks the P-256 assertion signature, and binds it to the authorization payload. It does not replace browser verification of origin, RP ID, user presence, or attestation.
 
 Do not deploy either fixture to pubnet, place assets under its address, reuse production administrator identities, or describe fixture acceptance as proof that a production wallet is secure.
