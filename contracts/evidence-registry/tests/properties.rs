@@ -22,6 +22,7 @@ fn setup() -> (Env, Address, Address, Address) {
     (env, contract_id, admin, publisher)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn input(
     env: &Env,
     publisher: &Address,
@@ -30,6 +31,7 @@ fn input(
     score_bps: u32,
     passed: u32,
     bitmap: u64,
+    network: NetworkKind,
 ) -> EvidenceInput {
     EvidenceInput {
         publisher: publisher.clone(),
@@ -38,7 +40,7 @@ fn input(
         suite_hash: BytesN::from_array(env, &[3; 32]),
         specs_hash: BytesN::from_array(env, &[4; 32]),
         artifact_root: BytesN::from_array(env, &[5; 32]),
-        network: NetworkKind::Testnet,
+        network,
         protocol_bitmap: bitmap,
         score_bps,
         passed,
@@ -50,6 +52,142 @@ fn input(
 
 proptest! {
     #![proptest_config(ProptestConfig { cases: 32, ..ProptestConfig::default() })]
+
+    #[test]
+    fn arbitrary_evidence_ids_are_deterministic_across_equivalent_inputs(
+        report_byte in 1u8..=255,
+        other_report_byte in 1u8..=255,
+        network_variant in 0u8..=3,
+        other_network_variant in 0u8..=3,
+        use_other_publisher in any::<bool>(),
+    ) {
+        let network = match network_variant {
+            0 => NetworkKind::Testnet,
+            1 => NetworkKind::Futurenet,
+            2 => NetworkKind::Pubnet,
+            _ => NetworkKind::Standalone,
+        };
+        let other_network = match other_network_variant {
+            0 => NetworkKind::Testnet,
+            1 => NetworkKind::Futurenet,
+            2 => NetworkKind::Pubnet,
+            _ => NetworkKind::Standalone,
+        };
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EvidenceRegistry, ());
+        let admin = Address::generate(&env);
+        let publisher = Address::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        );
+        let client = EvidenceRegistryClient::new(&env, &contract_id);
+        client.initialize(&admin, &SCHEMA_VERSION);
+        client.register_attestor(&publisher, &BytesN::from_array(&env, &[9; 32]));
+
+        let baseline = input(
+            &env,
+            &publisher,
+            report_byte,
+            2,
+            5_000,
+            1,
+            1,
+            network.clone(),
+        );
+        let baseline_id = client.publish_evidence(&baseline);
+        prop_assert_eq!(
+            client.try_publish_evidence(&baseline),
+            Err(Ok(ContractError::EvidenceAlreadyExists))
+        );
+
+        let equivalent_env = Env::default();
+        equivalent_env.mock_all_auths();
+        let equivalent_contract = equivalent_env.register(EvidenceRegistry, ());
+        let equivalent_admin = Address::generate(&equivalent_env);
+        let equivalent_publisher = Address::from_str(
+            &equivalent_env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        );
+        let equivalent_client = EvidenceRegistryClient::new(
+            &equivalent_env,
+            &equivalent_contract,
+        );
+        equivalent_client.initialize(&equivalent_admin, &SCHEMA_VERSION);
+        equivalent_client.register_attestor(
+            &equivalent_publisher,
+            &BytesN::from_array(&equivalent_env, &[9; 32]),
+        );
+        let equivalent = input(
+            &equivalent_env,
+            &equivalent_publisher,
+            report_byte,
+            2,
+            5_000,
+            1,
+            1,
+            match network_variant {
+                0 => NetworkKind::Testnet,
+                1 => NetworkKind::Futurenet,
+                2 => NetworkKind::Pubnet,
+                _ => NetworkKind::Standalone,
+            },
+        );
+        prop_assert_eq!(
+            equivalent_client.publish_evidence(&equivalent),
+            baseline_id.clone()
+        );
+
+        if other_report_byte != report_byte {
+            let changed_report = input(
+                &env,
+                &publisher,
+                other_report_byte,
+                2,
+                5_000,
+                1,
+                1,
+                network.clone(),
+            );
+            let changed_report_id = client.publish_evidence(&changed_report);
+            prop_assert_ne!(changed_report_id, baseline_id.clone());
+        }
+
+        if other_network_variant != network_variant {
+            let changed_network = input(
+                &env,
+                &publisher,
+                report_byte,
+                2,
+                5_000,
+                1,
+                1,
+                other_network,
+            );
+            let changed_network_id = client.publish_evidence(&changed_network);
+            prop_assert_ne!(changed_network_id, baseline_id.clone());
+        }
+
+        if use_other_publisher {
+            let other_publisher = Address::generate(&env);
+            client.register_attestor(
+                &other_publisher,
+                &BytesN::from_array(&env, &[10; 32]),
+            );
+            let changed_publisher = input(
+                &env,
+                &other_publisher,
+                report_byte,
+                2,
+                5_000,
+                1,
+                1,
+                network.clone(),
+            );
+            let changed_publisher_id = client.publish_evidence(&changed_publisher);
+            prop_assert_ne!(changed_publisher_id, baseline_id);
+        }
+    }
 
     #[test]
     fn arbitrary_valid_records_remain_unique(
@@ -70,6 +208,7 @@ proptest! {
             score_bps,
             passed,
             bitmap,
+            NetworkKind::Testnet,
         );
         let id = client.publish_evidence(&original);
         let mut duplicate = original.clone();
@@ -91,7 +230,16 @@ proptest! {
     ) {
         let (env, contract_id, _admin, publisher) = setup();
         let client = EvidenceRegistryClient::new(&env, &contract_id);
-        let first = input(&env, &publisher, start, 2, 5_000, 1, 1);
+        let first = input(
+            &env,
+            &publisher,
+            start,
+            2,
+            5_000,
+            1,
+            1,
+            NetworkKind::Testnet,
+        );
         let mut current_id = client.publish_evidence(&first);
 
         for offset in 1..=chain_length {
@@ -103,6 +251,7 @@ proptest! {
                 5_000,
                 u32::from(offset),
                 1,
+                NetworkKind::Testnet,
             );
             let next_id = client.supersede_evidence(&current_id, &replacement, &publisher);
             prop_assert_ne!(next_id.clone(), current_id.clone());
@@ -126,7 +275,16 @@ proptest! {
     ) {
         let (env, contract_id, _admin, publisher) = setup();
         let client = EvidenceRegistryClient::new(&env, &contract_id);
-        let first = input(&env, &publisher, start, 2, 5_000, 1, 1);
+        let first = input(
+            &env,
+            &publisher,
+            start,
+            2,
+            5_000,
+            1,
+            1,
+            NetworkKind::Testnet,
+        );
         let first_id = client.publish_evidence(&first);
         let mut current_id = first_id.clone();
         let mut ids = vec![first_id];
@@ -142,6 +300,7 @@ proptest! {
                 5_000,
                 u32::from(offset),
                 1,
+                NetworkKind::Testnet,
             );
             current_id = client.supersede_evidence(&current_id, &replacement, &publisher);
             ids.push(current_id.clone());
@@ -209,7 +368,16 @@ proptest! {
     ) {
         let (env, contract_id, admin, publisher) = setup();
         let client = EvidenceRegistryClient::new(&env, &contract_id);
-        let evidence = input(&env, &publisher, report_byte, 2, 5_000, 1, 1);
+        let evidence = input(
+            &env,
+            &publisher,
+            report_byte,
+            2,
+            5_000,
+            1,
+            1,
+            NetworkKind::Testnet,
+        );
         let id = client.publish_evidence(&evidence);
         let revoker = if by_admin { admin } else { publisher };
         let reason = BytesN::from_array(&env, &[reason_byte; 32]);

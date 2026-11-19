@@ -28,6 +28,7 @@ mod tests {
     #[serde(rename_all = "camelCase")]
     struct VectorFile {
         schema_version: u32,
+        hash_algorithm: String,
         domain_hex: String,
         network_encoding: String,
         publisher_address_encoding: String,
@@ -75,6 +76,7 @@ mod tests {
             serde_json::from_str(include_str!("../../../fixtures/evidence-id-vectors.json"))
                 .unwrap();
         assert_eq!(fixture.schema_version, 1);
+        assert_eq!(fixture.hash_algorithm, "sha256");
         assert_eq!(
             fixture.domain_hex,
             "72616d70737065632d65766964656e63652d7631"
@@ -185,5 +187,30 @@ mod tests {
             baseline,
             derive(&env, &publisher(&env), &report_hash, &NetworkKind::Pubnet)
         );
+    }
+
+    #[test]
+    fn distinct_domains_do_not_collide() {
+        let env = Env::default();
+        let publisher = publisher(&env);
+        let report_hash = BytesN::from_array(&env, &[7; 32]);
+        let network = NetworkKind::Testnet;
+
+        let mut canonical = Bytes::new(&env);
+        canonical.extend_from_slice(EVIDENCE_ID_DOMAIN);
+        canonical.append(&publisher.clone().to_xdr(&env));
+        canonical.extend_from_slice(&report_hash.to_array());
+        canonical.extend_from_slice(&network.discriminant().to_be_bytes());
+        let canonical_id = BytesN::from_array(&env, &env.crypto().sha256(&canonical).to_array());
+
+        let mut different_domain = Bytes::new(&env);
+        different_domain.extend_from_slice(b"rampspec-evidence-v2");
+        different_domain.append(&publisher.to_xdr(&env));
+        different_domain.extend_from_slice(&report_hash.to_array());
+        different_domain.extend_from_slice(&network.discriminant().to_be_bytes());
+        let different_domain_id =
+            BytesN::from_array(&env, &env.crypto().sha256(&different_domain).to_array());
+
+        assert_ne!(canonical_id, different_domain_id);
     }
 }
