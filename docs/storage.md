@@ -10,6 +10,8 @@ The `InstanceKeyV1` namespace stores one administrator address, an optional pend
 
 The `PersistentKeyV1` namespace stores attestors by address, evidence by its 32-byte identifier, the active publisher/report/network uniqueness index, and the forward supersession link. Full reports, domains, URLs, credentials, customer fields, and authorization tokens are prohibited.
 
+A successful supersession commits the terminal old record, active replacement record, old-index removal, replacement-index insertion, and forward link before emitting exactly one `evidence_superseded` event. Its indexed topics are the old and new identifiers and its data contains the authorizer. Publisher- and administrator-authorized replacements use the same order. Any rejected replacement rolls the transaction back and emits no event.
+
 ## Compatibility Policy
 
 New optional indexes may use a newly named key variant. Existing key encodings and stored value meanings are immutable. A value-shape change requires an explicit new version and migration tooling; incompatible evidence interpretation requires a new contract deployment and migration index rather than in-place reinterpretation.

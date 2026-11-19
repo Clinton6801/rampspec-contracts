@@ -926,6 +926,51 @@ mod tests {
     }
 
     #[test]
+    fn supersession_commits_one_indexer_event_after_state_for_each_authorizer() {
+        for use_admin in [false, true] {
+            let (env, contract_id, admin) = setup();
+            let publisher = register_publisher(&env, &contract_id, &admin);
+            let client = EvidenceRegistryClient::new(&env, &contract_id);
+            let original = valid_input(&env, &publisher);
+            let old_id = client.publish_evidence(&original);
+            let mut replacement = valid_input(&env, &publisher);
+            replacement.report_hash = BytesN::from_array(&env, &[49; 32]);
+            let authorizer = if use_admin {
+                admin.clone()
+            } else {
+                publisher.clone()
+            };
+
+            let new_id = client.supersede_evidence(&old_id, &replacement, &authorizer);
+            assert_eq!(env.events().all().events().len(), 1);
+            let state = env.as_contract(&contract_id, || {
+                (
+                    storage::evidence(&env, &old_id).unwrap(),
+                    storage::evidence(&env, &new_id).unwrap(),
+                    storage::active_id(
+                        &env,
+                        &original.publisher,
+                        &original.report_hash,
+                        &original.network,
+                    ),
+                    storage::active_id(
+                        &env,
+                        &replacement.publisher,
+                        &replacement.report_hash,
+                        &replacement.network,
+                    ),
+                    storage::superseded_by(&env, &old_id),
+                )
+            });
+            assert_eq!(state.0.status, EvidenceStatus::Superseded);
+            assert_eq!(state.1.status, EvidenceStatus::Active);
+            assert_eq!(state.2, None);
+            assert_eq!(state.3, Some(new_id.clone()));
+            assert_eq!(state.4, Some(new_id));
+        }
+    }
+
+    #[test]
     fn supersession_rejects_invalid_ownership_state_and_duplicates() {
         let (env, contract_id, admin) = setup();
         let publisher = register_publisher(&env, &contract_id, &admin);
