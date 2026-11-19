@@ -88,6 +88,15 @@ pub struct AdminChanged {
 
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminProposalCancelled {
+    #[topic]
+    pub current_admin: Address,
+    #[topic]
+    pub cancelled_admin: Address,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Upgraded {
     pub old_wasm_hash: BytesN<32>,
     #[topic]
@@ -100,7 +109,9 @@ pub struct EvidenceRegistry;
 #[contractimpl]
 impl EvidenceRegistry {
     pub fn schema_version(env: Env) -> Result<u32, ContractError> {
-        storage::schema_version(&env)
+        let version = storage::schema_version(&env)?;
+        storage::extend_instance_ttl(&env);
+        Ok(version)
     }
 
     pub fn initialize(env: Env, admin: Address, schema_version: u32) -> Result<(), ContractError> {
@@ -237,17 +248,29 @@ impl EvidenceRegistry {
 
     #[must_use]
     pub fn get_evidence(env: Env, id: BytesN<32>) -> Option<EvidenceRecord> {
-        storage::evidence(&env, &id)
+        let record = storage::evidence(&env, &id);
+        if record.is_some() {
+            storage::extend_instance_ttl(&env);
+        }
+        record
     }
 
     #[must_use]
     pub fn get_attestor(env: Env, attestor: Address) -> Option<AttestorRecord> {
-        storage::attestor(&env, &attestor)
+        let record = storage::attestor(&env, &attestor);
+        if record.is_some() {
+            storage::extend_instance_ttl(&env);
+        }
+        record
     }
 
     #[must_use]
     pub fn is_active(env: Env, id: BytesN<32>) -> bool {
-        storage::evidence(&env, &id).is_some_and(|record| record.status == EvidenceStatus::Active)
+        let record = storage::evidence(&env, &id);
+        if record.is_some() {
+            storage::extend_instance_ttl(&env);
+        }
+        record.is_some_and(|value| value.status == EvidenceStatus::Active)
     }
 
     pub fn revoke_evidence(
@@ -271,6 +294,13 @@ impl EvidenceRegistry {
 
         record.status = EvidenceStatus::Revoked;
         storage::set_evidence(&env, &record);
+        storage::remove_active_id_if_matches(
+            &env,
+            &record.publisher,
+            &record.report_hash,
+            &record.network,
+            &id,
+        );
         EvidenceRevoked {
             id,
             revoker,
@@ -406,6 +436,21 @@ impl EvidenceRegistry {
         AdminChanged {
             old_admin,
             new_admin,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    pub fn cancel_admin_transfer(env: Env) -> Result<(), ContractError> {
+        let current_admin = storage::admin(&env)?;
+        current_admin.require_auth();
+        let cancelled_admin =
+            storage::pending_admin(&env).ok_or(ContractError::AdminProposalMissing)?;
+        storage::clear_pending_admin(&env);
+        storage::extend_instance_ttl(&env);
+        AdminProposalCancelled {
+            current_admin,
+            cancelled_admin,
         }
         .publish(&env);
         Ok(())
@@ -737,6 +782,72 @@ mod tests {
     }
 
     #[test]
+    fn successful_reads_refresh_only_instance_ttl() {
+        for read_kind in 0..4 {
+            let (env, contract_id, admin) = setup();
+            let publisher = register_publisher(&env, &contract_id, &admin);
+            let client = EvidenceRegistryClient::new(&env, &contract_id);
+            let id = client.publish_evidence(&valid_input(&env, &publisher));
+            env.ledger().set_sequence_number(2_000_000);
+            let before = env.as_contract(&contract_id, || {
+                (
+                    env.storage().instance().get_ttl(),
+                    env.storage()
+                        .persistent()
+                        .get_ttl(&PersistentKeyV1::Evidence(id.clone())),
+                    env.storage()
+                        .persistent()
+                        .get_ttl(&PersistentKeyV1::Attestor(publisher.clone())),
+                )
+            });
+            assert!(before.0 < storage::INSTANCE_TTL_THRESHOLD);
+
+            match read_kind {
+                0 => assert_eq!(client.schema_version(), SCHEMA_VERSION),
+                1 => assert!(client.get_evidence(&id).is_some()),
+                2 => assert!(client.get_attestor(&publisher).is_some()),
+                _ => assert!(client.is_active(&id)),
+            }
+
+            let after = env.as_contract(&contract_id, || {
+                (
+                    env.storage().instance().get_ttl(),
+                    env.storage()
+                        .persistent()
+                        .get_ttl(&PersistentKeyV1::Evidence(id.clone())),
+                    env.storage()
+                        .persistent()
+                        .get_ttl(&PersistentKeyV1::Attestor(publisher.clone())),
+                )
+            });
+            assert!(after.0 >= storage::INSTANCE_TTL_TARGET - 1);
+            assert_eq!((after.1, after.2), (before.1, before.2));
+        }
+    }
+
+    #[test]
+    fn missing_reads_do_not_extend_instance_ttl_or_create_state() {
+        let (env, contract_id, admin) = setup();
+        let client = EvidenceRegistryClient::new(&env, &contract_id);
+        client.initialize(&admin, &SCHEMA_VERSION);
+        env.ledger().set_sequence_number(2_000_000);
+        let missing_id = BytesN::from_array(&env, &[99; 32]);
+        let missing_attestor = Address::generate(&env);
+        let before = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+
+        assert_eq!(client.get_evidence(&missing_id), None);
+        assert_eq!(client.get_attestor(&missing_attestor), None);
+        assert!(!client.is_active(&missing_id));
+
+        let after = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+        assert_eq!(after, before);
+        env.as_contract(&contract_id, || {
+            assert_eq!(storage::evidence(&env, &missing_id), None);
+            assert_eq!(storage::attestor(&env, &missing_attestor), None);
+        });
+    }
+
+    #[test]
     fn reads_remain_available_for_disabled_attestors_while_paused() {
         let (env, contract_id, admin) = setup();
         let publisher = register_publisher(&env, &contract_id, &admin);
@@ -763,7 +874,8 @@ mod tests {
             let (env, contract_id, admin) = setup();
             let publisher = register_publisher(&env, &contract_id, &admin);
             let client = EvidenceRegistryClient::new(&env, &contract_id);
-            let id = client.publish_evidence(&valid_input(&env, &publisher));
+            let input = valid_input(&env, &publisher);
+            let id = client.publish_evidence(&input);
             let revoker = if use_admin {
                 admin.clone()
             } else {
@@ -781,7 +893,55 @@ mod tests {
                 client.try_revoke_evidence(&id, &reason, &revoker),
                 Err(Ok(ContractError::EvidenceNotActive))
             );
+            assert_eq!(
+                env.as_contract(&contract_id, || storage::active_id(
+                    &env,
+                    &input.publisher,
+                    &input.report_hash,
+                    &input.network,
+                )),
+                None
+            );
+            assert_eq!(
+                client.try_publish_evidence(&input),
+                Err(Ok(ContractError::EvidenceAlreadyExists))
+            );
         }
+    }
+
+    #[test]
+    fn revocation_preserves_a_conflicting_active_index() {
+        let (env, contract_id, admin) = setup();
+        let publisher = register_publisher(&env, &contract_id, &admin);
+        let client = EvidenceRegistryClient::new(&env, &contract_id);
+        let input = valid_input(&env, &publisher);
+        let id = client.publish_evidence(&input);
+        let conflicting_id = BytesN::from_array(&env, &[88; 32]);
+        env.as_contract(&contract_id, || {
+            storage::set_active_id(
+                &env,
+                &input.publisher,
+                &input.report_hash,
+                &input.network,
+                &conflicting_id,
+            );
+        });
+
+        client.revoke_evidence(&id, &BytesN::from_array(&env, &[31; 32]), &publisher);
+
+        assert_eq!(
+            env.as_contract(&contract_id, || storage::active_id(
+                &env,
+                &input.publisher,
+                &input.report_hash,
+                &input.network,
+            )),
+            Some(conflicting_id)
+        );
+        assert_eq!(
+            client.get_evidence(&id).unwrap().status,
+            EvidenceStatus::Revoked
+        );
     }
 
     #[test]
@@ -1023,6 +1183,65 @@ mod tests {
     }
 
     #[test]
+    fn current_admin_can_cancel_a_pending_transfer() {
+        let (env, contract_id, admin) = setup();
+        let client = EvidenceRegistryClient::new(&env, &contract_id);
+        client.initialize(&admin, &SCHEMA_VERSION);
+        let candidate = Address::generate(&env);
+        client.propose_admin(&candidate);
+
+        client.cancel_admin_transfer();
+
+        assert_eq!(env.events().all().events().len(), 1);
+        env.as_contract(&contract_id, || {
+            assert_eq!(storage::admin(&env), Ok(admin));
+            assert_eq!(storage::pending_admin(&env), None);
+        });
+        assert_eq!(
+            client.try_accept_admin(),
+            Err(Ok(ContractError::AdminProposalMissing))
+        );
+    }
+
+    #[test]
+    fn rejected_admin_cancellation_preserves_state_ttl_and_events() {
+        let (env, contract_id, admin) = setup();
+        let client = EvidenceRegistryClient::new(&env, &contract_id);
+        client.initialize(&admin, &SCHEMA_VERSION);
+        let ttl_before = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+        assert_eq!(
+            client.try_cancel_admin_transfer(),
+            Err(Ok(ContractError::AdminProposalMissing))
+        );
+        assert_eq!(env.events().all().events().len(), 0);
+        assert_eq!(
+            env.as_contract(&contract_id, || env.storage().instance().get_ttl()),
+            ttl_before
+        );
+
+        let candidate = Address::generate(&env);
+        client.propose_admin(&candidate);
+        let before = env.as_contract(&contract_id, || {
+            (
+                storage::pending_admin(&env),
+                env.storage().instance().get_ttl(),
+            )
+        });
+        env.set_auths(&[]);
+        assert!(client.try_cancel_admin_transfer().is_err());
+        assert_eq!(env.events().all().events().len(), 0);
+        assert_eq!(
+            env.as_contract(&contract_id, || {
+                (
+                    storage::pending_admin(&env),
+                    env.storage().instance().get_ttl(),
+                )
+            }),
+            before
+        );
+    }
+
+    #[test]
     fn admin_proposal_rejects_self_and_requires_current_admin_auth() {
         let (env, contract_id, admin) = setup();
         let client = EvidenceRegistryClient::new(&env, &contract_id);
@@ -1132,6 +1351,81 @@ mod tests {
         });
         assert!(refreshed.0 >= storage::PERSISTENT_TTL_TARGET - 1);
         assert!(refreshed.1 >= storage::INSTANCE_TTL_TARGET - 1);
+    }
+
+    #[test]
+    fn maintenance_repairs_missing_active_indexes_idempotently() {
+        let (env, contract_id, admin) = setup();
+        let publisher = register_publisher(&env, &contract_id, &admin);
+        let client = EvidenceRegistryClient::new(&env, &contract_id);
+        let input = valid_input(&env, &publisher);
+        let id = client.publish_evidence(&input);
+        let record_before = env.as_contract(&contract_id, || {
+            storage::remove_active_id(&env, &input.publisher, &input.report_hash, &input.network);
+            storage::evidence(&env, &id).unwrap()
+        });
+
+        client.maintain_evidence(&id);
+        assert_eq!(env.events().all().events().len(), 0);
+        env.as_contract(&contract_id, || {
+            assert_eq!(storage::evidence(&env, &id), Some(record_before.clone()));
+            assert_eq!(
+                storage::active_id(&env, &input.publisher, &input.report_hash, &input.network,),
+                Some(id.clone())
+            );
+        });
+
+        client.maintain_evidence(&id);
+        assert_eq!(env.events().all().events().len(), 0);
+        assert_eq!(client.get_evidence(&id), Some(record_before));
+    }
+
+    #[test]
+    fn maintenance_rejects_conflicting_indexes_before_ttl_changes() {
+        let (env, contract_id, admin) = setup();
+        let publisher = register_publisher(&env, &contract_id, &admin);
+        let client = EvidenceRegistryClient::new(&env, &contract_id);
+        let input = valid_input(&env, &publisher);
+        let id = client.publish_evidence(&input);
+        let conflicting_id = BytesN::from_array(&env, &[87; 32]);
+        let before = env.as_contract(&contract_id, || {
+            storage::set_active_id(
+                &env,
+                &input.publisher,
+                &input.report_hash,
+                &input.network,
+                &conflicting_id,
+            );
+            (
+                storage::evidence(&env, &id).unwrap(),
+                env.storage()
+                    .persistent()
+                    .get_ttl(&PersistentKeyV1::Evidence(id.clone())),
+                env.storage().instance().get_ttl(),
+            )
+        });
+
+        assert_eq!(
+            client.try_maintain_evidence(&id),
+            Err(Ok(ContractError::EvidenceAlreadyExists))
+        );
+        assert_eq!(env.events().all().events().len(), 0);
+        env.as_contract(&contract_id, || {
+            assert_eq!(storage::evidence(&env, &id), Some(before.0));
+            assert_eq!(
+                storage::active_id(&env, &input.publisher, &input.report_hash, &input.network,),
+                Some(conflicting_id)
+            );
+            assert_eq!(
+                (
+                    env.storage()
+                        .persistent()
+                        .get_ttl(&PersistentKeyV1::Evidence(id)),
+                    env.storage().instance().get_ttl(),
+                ),
+                (before.1, before.2)
+            );
+        });
     }
 
     #[test]
