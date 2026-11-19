@@ -131,9 +131,16 @@ impl EvidenceRegistry {
             return Err(ContractError::InvalidHash);
         }
 
+        let existing = storage::attestor(&env, &attestor);
+        if existing
+            .as_ref()
+            .is_some_and(|record| record.enabled && record.metadata_hash == metadata_hash)
+        {
+            return Ok(());
+        }
+
         let ledger = env.ledger().sequence();
-        let registered_ledger =
-            storage::attestor(&env, &attestor).map_or(ledger, |record| record.registered_ledger);
+        let registered_ledger = existing.map_or(ledger, |record| record.registered_ledger);
         storage::set_attestor(
             &env,
             &AttestorRecord {
@@ -587,6 +594,39 @@ mod tests {
     }
 
     #[test]
+    fn identical_enabled_attestor_registration_is_a_true_no_op() {
+        let (env, contract_id, admin) = setup();
+        let client = EvidenceRegistryClient::new(&env, &contract_id);
+        client.initialize(&admin, &SCHEMA_VERSION);
+        let attestor = Address::generate(&env);
+        let metadata_hash = BytesN::from_array(&env, &[1; 32]);
+        client.register_attestor(&attestor, &metadata_hash);
+        env.ledger().set_sequence_number(1_000);
+
+        let (before, ttl_before) = env.as_contract(&contract_id, || {
+            (
+                storage::attestor(&env, &attestor).unwrap(),
+                env.storage()
+                    .persistent()
+                    .get_ttl(&PersistentKeyV1::Attestor(attestor.clone())),
+            )
+        });
+        client.register_attestor(&attestor, &metadata_hash);
+        let (after, ttl_after) = env.as_contract(&contract_id, || {
+            (
+                storage::attestor(&env, &attestor).unwrap(),
+                env.storage()
+                    .persistent()
+                    .get_ttl(&PersistentKeyV1::Attestor(attestor.clone())),
+            )
+        });
+
+        assert_eq!(after, before);
+        assert_eq!(ttl_after, ttl_before);
+        assert_eq!(env.events().all().events().len(), 0);
+    }
+
+    #[test]
     fn rejects_an_empty_attestor_commitment() {
         let (env, contract_id, admin) = setup();
         let client = EvidenceRegistryClient::new(&env, &contract_id);
@@ -899,6 +939,7 @@ mod tests {
             Err(Ok(ContractError::Unauthorized))
         );
         assert!(client.is_active(&old_id));
+        assert_eq!(env.events().all().events().len(), 0);
 
         let duplicate_id = client.publish_evidence(&replacement);
         assert_eq!(
@@ -907,6 +948,11 @@ mod tests {
         );
         assert!(client.is_active(&old_id));
         assert!(client.is_active(&duplicate_id));
+        assert_eq!(
+            env.as_contract(&contract_id, || storage::superseded_by(&env, &old_id)),
+            None
+        );
+        assert_eq!(env.events().all().events().len(), 0);
 
         client.revoke_evidence(&old_id, &BytesN::from_array(&env, &[31; 32]), &publisher);
         let mut another = replacement;
@@ -956,10 +1002,31 @@ mod tests {
         env.as_contract(&contract_id, || {
             storage::set_superseded_by(&env, &new_id, &old_id);
         });
+        let old_before = client.get_evidence(&old_id).unwrap();
+        let old_ttl_before = env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .get_ttl(&PersistentKeyV1::Evidence(old_id.clone()))
+        });
         assert_eq!(
             client.try_supersede_evidence(&old_id, &replacement, &publisher),
             Err(Ok(ContractError::InvalidSupersession))
         );
+        assert_eq!(client.get_evidence(&old_id), Some(old_before));
+        assert_eq!(client.get_evidence(&new_id), None);
+        assert_eq!(
+            env.as_contract(&contract_id, || storage::superseded_by(&env, &new_id)),
+            Some(old_id.clone())
+        );
+        assert_eq!(
+            env.as_contract(&contract_id, || {
+                env.storage()
+                    .persistent()
+                    .get_ttl(&PersistentKeyV1::Evidence(old_id.clone()))
+            }),
+            old_ttl_before
+        );
+        assert_eq!(env.events().all().events().len(), 0);
 
         env.as_contract(&contract_id, || {
             let mut cursor = new_id.clone();
@@ -1012,6 +1079,13 @@ mod tests {
             Err(Ok(ContractError::Paused))
         );
         assert!(client.get_evidence(&old_id).is_some());
+        let stranger = Address::generate(&env);
+        assert_eq!(
+            client.try_revoke_evidence(&old_id, &BytesN::from_array(&env, &[31; 32]), &stranger),
+            Err(Ok(ContractError::Unauthorized))
+        );
+        assert!(client.is_active(&old_id));
+        assert_eq!(env.events().all().events().len(), 0);
         client.revoke_evidence(&old_id, &BytesN::from_array(&env, &[31; 32]), &publisher);
         assert!(!client.is_active(&old_id));
     }

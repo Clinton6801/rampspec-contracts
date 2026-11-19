@@ -16,7 +16,7 @@ Compare RPC event cursor, latest finalized ledger, contract IDs, transaction has
 
 ## Incident Response
 
-Unexpected code, schema, administrator, attestor, pause, or upgrade state is critical. Preserve RPC responses and manifests, notify the security and contract owners, and stop publication only when continued writes increase impact. Reads and revocation remain available while paused. Rotate compromised off-chain signer access, disable affected attestors, and use two-step administrator transfer where appropriate. Any code correction follows independent review, release, testnet rehearsal, and the rollback/forward-fix matrix. Conduct the recovery drill every 90 days even without a production deployment, using disposable local state.
+Unexpected code, schema, administrator, attestor, pause, or upgrade state is critical. Preserve RPC responses and manifests, notify the security and contract owners, and stop publication only when continued writes increase impact. Reads remain available while paused. Revocation also remains available to the evidence publisher or administrator, still requires authorization and a nonzero reason commitment, and cannot change an already terminal record. Rotate compromised off-chain signer access, disable affected attestors, and use two-step administrator transfer where appropriate. Any code correction follows independent review, release, testnet rehearsal, and the rollback/forward-fix matrix. Conduct the recovery drill every 90 days even without a production deployment, using disposable local state.
 
 ## Cost and Resource Budgets
 
