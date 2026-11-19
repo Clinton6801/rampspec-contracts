@@ -2,7 +2,7 @@ use evidence_registry::{EvidenceRegistry, EvidenceRegistryClient};
 use rampspec_shared_types::{
     EvidenceInput, NetworkKind, SCHEMA_VERSION, SUPPORTED_PROTOCOL_BITMAP,
 };
-use soroban_sdk::{Address, BytesN, Env, testutils::Address as _};
+use soroban_sdk::{Address, BytesN, Env, testutils::Address as _, testutils::Ledger as _};
 
 fn input(env: &Env, publisher: &Address, marker: u8) -> EvidenceInput {
     EvidenceInput {
@@ -69,6 +69,23 @@ fn long_replacement_chain_stays_within_reviewed_budget() {
     client.supersede_evidence(&current, &input(&env, &publisher, 13), &publisher);
 
     assert_budget(&env, 30_000_000, 24_000_000);
+}
+
+#[test]
+fn revoked_evidence_maintenance_stays_within_reviewed_budget() {
+    let (env, contract_id, publisher) = setup();
+    let client = EvidenceRegistryClient::new(&env, &contract_id);
+    let id = client.publish_evidence(&input(&env, &publisher, 1));
+    client.revoke_evidence(&id, &BytesN::from_array(&env, &[8; 32]), &publisher);
+
+    env.ledger().set_sequence_number(1_500_000);
+    client.set_paused(&false);
+    env.ledger().set_sequence_number(2_600_000);
+    env.cost_estimate().budget().reset_tracker();
+
+    client.maintain_evidence(&id);
+
+    assert_budget(&env, 10_000_000, 8_000_000);
 }
 
 #[test]

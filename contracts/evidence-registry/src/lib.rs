@@ -1173,6 +1173,123 @@ mod tests {
     }
 
     #[test]
+    fn maintenance_refreshes_revoked_evidence_without_recreating_active_index() {
+        let (env, contract_id, admin) = setup();
+        let publisher = register_publisher(&env, &contract_id, &admin);
+        let client = EvidenceRegistryClient::new(&env, &contract_id);
+        let evidence_input = valid_input(&env, &publisher);
+        let id = client.publish_evidence(&evidence_input);
+        let reason = BytesN::from_array(&env, &[31; 32]);
+        client.revoke_evidence(&id, &reason, &publisher);
+
+        let record = client.get_evidence(&id).unwrap();
+        assert_eq!(record.status, EvidenceStatus::Revoked);
+        env.as_contract(&contract_id, || {
+            storage::remove_active_id(
+                &env,
+                &record.publisher,
+                &record.report_hash,
+                &record.network,
+            );
+        });
+
+        env.ledger().set_sequence_number(1_500_000);
+        env.as_contract(&contract_id, || storage::set_paused(&env, false));
+        env.ledger().set_sequence_number(2_600_000);
+        let before = env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .get_ttl(&PersistentKeyV1::Evidence(id.clone()))
+        });
+        assert!(before < storage::PERSISTENT_TTL_THRESHOLD);
+        let event_count = env.events().all().events().len();
+
+        client.maintain_evidence(&id);
+
+        let (refreshed_ttl, stored_record, active_id) = env.as_contract(&contract_id, || {
+            (
+                env.storage()
+                    .persistent()
+                    .get_ttl(&PersistentKeyV1::Evidence(id.clone())),
+                storage::evidence(&env, &id).unwrap(),
+                storage::active_id(
+                    &env,
+                    &record.publisher,
+                    &record.report_hash,
+                    &record.network,
+                ),
+            )
+        });
+        assert!(refreshed_ttl >= storage::PERSISTENT_TTL_TARGET - 1);
+        assert_eq!(stored_record.status, EvidenceStatus::Revoked);
+        assert_eq!(active_id, None);
+        assert_eq!(env.events().all().events().len(), event_count);
+    }
+
+    #[test]
+    fn revoked_evidence_maintenance_requires_admin_auth_without_effects() {
+        let (env, contract_id, admin) = setup();
+        let publisher = register_publisher(&env, &contract_id, &admin);
+        let client = EvidenceRegistryClient::new(&env, &contract_id);
+        let id = client.publish_evidence(&valid_input(&env, &publisher));
+        client.revoke_evidence(&id, &BytesN::from_array(&env, &[32; 32]), &publisher);
+        let before_ttl = env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .get_ttl(&PersistentKeyV1::Evidence(id.clone()))
+        });
+        let before_record = client.get_evidence(&id).unwrap();
+        let event_count = env.events().all().events().len();
+        env.set_auths(&[]);
+
+        assert!(client.try_maintain_evidence(&id).is_err());
+        assert_eq!(
+            env.as_contract(&contract_id, || {
+                env.storage()
+                    .persistent()
+                    .get_ttl(&PersistentKeyV1::Evidence(id.clone()))
+            }),
+            before_ttl
+        );
+        assert_eq!(client.get_evidence(&id), Some(before_record));
+        assert_eq!(env.events().all().events().len(), event_count);
+    }
+
+    #[test]
+    fn maintenance_cannot_restore_an_expired_revocation_record() {
+        let (env, contract_id, admin) = setup();
+        let publisher = register_publisher(&env, &contract_id, &admin);
+        let client = EvidenceRegistryClient::new(&env, &contract_id);
+        let evidence_input = valid_input(&env, &publisher);
+        let id = client.publish_evidence(&evidence_input);
+        client.revoke_evidence(&id, &BytesN::from_array(&env, &[33; 32]), &publisher);
+        env.as_contract(&contract_id, || {
+            storage::remove_active_id(
+                &env,
+                &publisher,
+                &evidence_input.report_hash,
+                &evidence_input.network,
+            );
+            env.storage()
+                .persistent()
+                .remove(&PersistentKeyV1::Evidence(id.clone()));
+        });
+        let instance_ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+        let event_count = env.events().all().events().len();
+
+        assert_eq!(client.get_evidence(&id), None);
+        assert_eq!(
+            client.try_maintain_evidence(&id),
+            Err(Ok(ContractError::EvidenceNotFound))
+        );
+        assert_eq!(
+            env.as_contract(&contract_id, || env.storage().instance().get_ttl()),
+            instance_ttl
+        );
+        assert_eq!(env.events().all().events().len(), event_count);
+    }
+
+    #[test]
     fn maintenance_rejects_missing_and_archived_entries() {
         let (env, contract_id, admin) = setup();
         let publisher = register_publisher(&env, &contract_id, &admin);

@@ -216,6 +216,13 @@ proptest! {
         client.revoke_evidence(&id, &reason, &revoker);
 
         prop_assert!(!client.is_active(&id));
+        let event_count = env.events().all().events().len();
+        client.maintain_evidence(&id);
+        prop_assert_eq!(
+            client.get_evidence(&id).unwrap().status,
+            EvidenceStatus::Revoked
+        );
+        prop_assert_eq!(env.events().all().events().len(), event_count);
         prop_assert_eq!(
             client.try_revoke_evidence(&id, &reason, &revoker),
             Err(Ok(ContractError::EvidenceNotActive))

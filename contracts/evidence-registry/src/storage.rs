@@ -1,5 +1,6 @@
 use rampspec_shared_types::{
-    AttestorRecord, ContractError, EvidenceRecord, InstanceKeyV1, NetworkKind, PersistentKeyV1,
+    AttestorRecord, ContractError, EvidenceRecord, EvidenceStatus, InstanceKeyV1, NetworkKind,
+    PersistentKeyV1,
 };
 use soroban_sdk::{Address, BytesN, Env};
 
@@ -196,11 +197,18 @@ pub(crate) fn maintain_attestor(env: &Env, address: &Address) -> Result<(), Cont
 pub(crate) fn maintain_evidence(env: &Env, id: &BytesN<32>) -> Result<(), ContractError> {
     let record = evidence(env, id).ok_or(ContractError::EvidenceNotFound)?;
     extend_persistent_ttl(env, &PersistentKeyV1::Evidence(id.clone()));
-    if record.status == rampspec_shared_types::EvidenceStatus::Active {
-        extend_persistent_ttl(
-            env,
-            &PersistentKeyV1::ActiveReport(record.publisher, record.report_hash, record.network),
-        );
+    match record.status {
+        EvidenceStatus::Active => {
+            extend_persistent_ttl(
+                env,
+                &PersistentKeyV1::ActiveReport(
+                    record.publisher,
+                    record.report_hash,
+                    record.network,
+                ),
+            );
+        }
+        EvidenceStatus::Superseded | EvidenceStatus::Revoked => {}
     }
     if superseded_by(env, id).is_some() {
         extend_persistent_ttl(env, &PersistentKeyV1::SupersededBy(id.clone()));

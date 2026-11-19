@@ -4,7 +4,7 @@
     "evidence-registry": {
       "json": "evidence_registry.json",
       "jsonSha256": "68906e3c5ce521d8ff1775b8ab66b6c17ac8c97f9fedb3a7c3c97b7b07e2b2b7",
-      "sourceSha256": "538b34741e1e57c5ea3d6e6b490d84a718201d455f889df0d9433ac6233d706c",
+      "sourceSha256": "bfaa4345df0382f9c6773a9c32e133aa45d8608629041d6a570e4e121dcead7a",
       "wasm": "evidence_registry.wasm",
       "wasmSha256": "e3e821b05183ddaf42912c07c93d1f35a5bd702058cfc4e90ff873b0290bef6a",
       "xdr": "evidence_registry.xdr-base64",
