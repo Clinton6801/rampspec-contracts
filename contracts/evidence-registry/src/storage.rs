@@ -11,7 +11,7 @@ pub(crate) const INSTANCE_TTL_TARGET: u32 = 2_073_600;
 pub(crate) const PERSISTENT_TTL_THRESHOLD: u32 = 518_400;
 pub(crate) const PERSISTENT_TTL_TARGET: u32 = 3_110_400;
 
-fn extend_instance_ttl(env: &Env) {
+pub(crate) fn extend_instance_ttl(env: &Env) {
     env.storage()
         .instance()
         .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_TARGET);
@@ -172,6 +172,20 @@ pub(crate) fn remove_active_id(
         ));
 }
 
+pub(crate) fn remove_active_id_if_matches(
+    env: &Env,
+    publisher: &Address,
+    report_hash: &BytesN<32>,
+    network: &NetworkKind,
+    expected_id: &BytesN<32>,
+) -> bool {
+    if active_id(env, publisher, report_hash, network).as_ref() != Some(expected_id) {
+        return false;
+    }
+    remove_active_id(env, publisher, report_hash, network);
+    true
+}
+
 pub(crate) fn superseded_by(env: &Env, id: &BytesN<32>) -> Option<BytesN<32>> {
     env.storage()
         .persistent()
@@ -196,20 +210,32 @@ pub(crate) fn maintain_attestor(env: &Env, address: &Address) -> Result<(), Cont
 
 pub(crate) fn maintain_evidence(env: &Env, id: &BytesN<32>) -> Result<(), ContractError> {
     let record = evidence(env, id).ok_or(ContractError::EvidenceNotFound)?;
-    extend_persistent_ttl(env, &PersistentKeyV1::Evidence(id.clone()));
     match record.status {
         EvidenceStatus::Active => {
-            extend_persistent_ttl(
-                env,
-                &PersistentKeyV1::ActiveReport(
-                    record.publisher,
-                    record.report_hash,
-                    record.network,
+            match active_id(env, &record.publisher, &record.report_hash, &record.network) {
+                Some(indexed_id) if indexed_id != *id => {
+                    return Err(ContractError::EvidenceAlreadyExists);
+                }
+                Some(_) => extend_persistent_ttl(
+                    env,
+                    &PersistentKeyV1::ActiveReport(
+                        record.publisher,
+                        record.report_hash,
+                        record.network,
+                    ),
                 ),
-            );
+                None => set_active_id(
+                    env,
+                    &record.publisher,
+                    &record.report_hash,
+                    &record.network,
+                    id,
+                ),
+            }
         }
         EvidenceStatus::Superseded | EvidenceStatus::Revoked => {}
     }
+    extend_persistent_ttl(env, &PersistentKeyV1::Evidence(id.clone()));
     if superseded_by(env, id).is_some() {
         extend_persistent_ttl(env, &PersistentKeyV1::SupersededBy(id.clone()));
     }

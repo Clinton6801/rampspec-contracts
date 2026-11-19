@@ -4,7 +4,9 @@ use rampspec_shared_types::{
     SUPPORTED_PROTOCOL_BITMAP,
 };
 use soroban_sdk::{
-    Address, Bytes, BytesN, Env, testutils::Address as _, testutils::Ledger as _, xdr::ToXdr,
+    Address, Bytes, BytesN, Env,
+    testutils::{Address as _, Ledger as _, storage::Instance as _, storage::Persistent as _},
+    xdr::ToXdr,
 };
 
 fn input(env: &Env, publisher: &Address, marker: u8) -> EvidenceInput {
@@ -152,4 +154,38 @@ fn maximum_supersession_chain_maintenance_stays_within_reviewed_budget() {
     client.maintain_supersession_chain(&first);
 
     assert_budget(&env, 80_000_000, 64_000_000);
+}
+
+#[test]
+fn successful_evidence_read_extends_only_instance_ttl_within_budget() {
+    let (env, contract_id, publisher) = setup();
+    let client = EvidenceRegistryClient::new(&env, &contract_id);
+    let id = client.publish_evidence(&input(&env, &publisher, 1));
+    env.ledger().set_sequence_number(2_000_000);
+    let before = env.as_contract(&contract_id, || {
+        (
+            env.storage().instance().get_ttl(),
+            env.storage()
+                .persistent()
+                .get_ttl(&PersistentKeyV1::Evidence(id.clone())),
+        )
+    });
+
+    assert!(client.get_evidence(&id).is_some());
+
+    let resources = env.cost_estimate().resources();
+    assert!(resources.instructions <= 5_000_000);
+    assert!(resources.mem_bytes <= 5_000_000);
+    assert!(resources.memory_read_entries <= 4);
+    assert!(resources.write_entries <= 2);
+    let after = env.as_contract(&contract_id, || {
+        (
+            env.storage().instance().get_ttl(),
+            env.storage()
+                .persistent()
+                .get_ttl(&PersistentKeyV1::Evidence(id)),
+        )
+    });
+    assert!(after.0 > before.0);
+    assert_eq!(after.1, before.1);
 }

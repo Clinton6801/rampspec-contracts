@@ -42,6 +42,7 @@ if (typeof window !== "undefined") {
 
 
 
+
 export type NetworkKind = {tag: "Testnet", values: void} | {tag: "Futurenet", values: void} | {tag: "Pubnet", values: void} | {tag: "Standalone", values: void};
 
 export const ContractError = {
@@ -197,6 +198,11 @@ export interface Client {
   set_attestor_enabled: ({attestor, enabled}: {attestor: string, enabled: boolean}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
 
   /**
+   * Construct and simulate a cancel_admin_transfer transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   */
+  cancel_admin_transfer: (options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
+
+  /**
    * Construct and simulate a maintain_supersession_chain transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    */
   maintain_supersession_chain: ({first_id}: {first_id: Buffer}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
@@ -236,6 +242,7 @@ export class Client extends ContractClient {
         "AAAAAAAAAAAAAAAMZ2V0X2F0dGVzdG9yAAAAAQAAAAAAAAAIYXR0ZXN0b3IAAAATAAAAAQAAA+gAAAfQAAAADkF0dGVzdG9yUmVjb3JkAAA=",
         "AAAAAAAAAAAAAAAMZ2V0X2V2aWRlbmNlAAAAAQAAAAAAAAACaWQAAAAAA+4AAAAgAAAAAQAAA+gAAAfQAAAADkV2aWRlbmNlUmVjb3JkAAA=",
         "AAAAAAAAAAAAAAANcHJvcG9zZV9hZG1pbgAAAAAAAAEAAAAAAAAACW5ld19hZG1pbgAAAAAAABMAAAABAAAD6QAAAAIAAAfQAAAADUNvbnRyYWN0RXJyb3IAAAA=",
+        "AAAABQAAAAAAAAAAAAAAFkFkbWluUHJvcG9zYWxDYW5jZWxsZWQAAAAAAAEAAAAYYWRtaW5fcHJvcG9zYWxfY2FuY2VsbGVkAAAAAgAAAAAAAAANY3VycmVudF9hZG1pbgAAAAAAABMAAAABAAAAAAAAAA9jYW5jZWxsZWRfYWRtaW4AAAAAEwAAAAEAAAAC",
         "AAAAAAAAAAAAAAAOc2NoZW1hX3ZlcnNpb24AAAAAAAAAAAABAAAD6QAAAAQAAAfQAAAADUNvbnRyYWN0RXJyb3IAAAA=",
         "AAAAAAAAAAAAAAAPcmV2b2tlX2V2aWRlbmNlAAAAAAMAAAAAAAAAAmlkAAAAAAPuAAAAIAAAAAAAAAALcmVhc29uX2hhc2gAAAAD7gAAACAAAAAAAAAAB3Jldm9rZXIAAAAAEwAAAAEAAAPpAAAAAgAAB9AAAAANQ29udHJhY3RFcnJvcgAAAA==",
         "AAAAAAAAAAAAAAAQcHVibGlzaF9ldmlkZW5jZQAAAAEAAAAAAAAABWlucHV0AAAAAAAH0AAAAA1FdmlkZW5jZUlucHV0AAAAAAAAAQAAA+kAAAPuAAAAIAAAB9AAAAANQ29udHJhY3RFcnJvcgAAAA==",
@@ -244,6 +251,7 @@ export class Client extends ContractClient {
         "AAAAAAAAAAAAAAARcmVnaXN0ZXJfYXR0ZXN0b3IAAAAAAAACAAAAAAAAAAhhdHRlc3RvcgAAABMAAAAAAAAADW1ldGFkYXRhX2hhc2gAAAAAAAPuAAAAIAAAAAEAAAPpAAAAAgAAB9AAAAANQ29udHJhY3RFcnJvcgAAAA==",
         "AAAAAAAAAAAAAAASc3VwZXJzZWRlX2V2aWRlbmNlAAAAAAADAAAAAAAAAAZvbGRfaWQAAAAAA+4AAAAgAAAAAAAAAAtyZXBsYWNlbWVudAAAAAfQAAAADUV2aWRlbmNlSW5wdXQAAAAAAAAAAAAACmF1dGhvcml6ZXIAAAAAABMAAAABAAAD6QAAA+4AAAAgAAAH0AAAAA1Db250cmFjdEVycm9yAAAA",
         "AAAAAAAAAAAAAAAUc2V0X2F0dGVzdG9yX2VuYWJsZWQAAAACAAAAAAAAAAhhdHRlc3RvcgAAABMAAAAAAAAAB2VuYWJsZWQAAAAAAQAAAAEAAAPpAAAAAgAAB9AAAAANQ29udHJhY3RFcnJvcgAAAA==",
+        "AAAAAAAAAAAAAAAVY2FuY2VsX2FkbWluX3RyYW5zZmVyAAAAAAAAAAAAAAEAAAPpAAAAAgAAB9AAAAANQ29udHJhY3RFcnJvcgAAAA==",
         "AAAAAAAAAAAAAAAbbWFpbnRhaW5fc3VwZXJzZXNzaW9uX2NoYWluAAAAAAEAAAAAAAAACGZpcnN0X2lkAAAD7gAAACAAAAABAAAD6QAAAAIAAAfQAAAADUNvbnRyYWN0RXJyb3IAAAA=",
         "AAAAAgAAAAAAAAAAAAAAC05ldHdvcmtLaW5kAAAAAAQAAAAAAAAAAAAAAAdUZXN0bmV0AAAAAAAAAAAAAAAACUZ1dHVyZW5ldAAAAAAAAAAAAAAAAAAABlB1Ym5ldAAAAAAAAAAAAAAAAAAKU3RhbmRhbG9uZQAA",
         "AAAABAAAAAAAAAAAAAAADUNvbnRyYWN0RXJyb3IAAAAAAAAPAAAAAAAAABJBbHJlYWR5SW5pdGlhbGl6ZWQAAAAAAAEAAAAAAAAADk5vdEluaXRpYWxpemVkAAAAAAACAAAAAAAAAAxVbmF1dGhvcml6ZWQAAAADAAAAAAAAAAZQYXVzZWQAAAAAAAQAAAAAAAAAC0ludmFsaWRIYXNoAAAAAAUAAAAAAAAADUludmFsaWRDb3VudHMAAAAAAAAGAAAAAAAAAAxJbnZhbGlkU2NvcmUAAAAHAAAAAAAAABVBdHRlc3Rvck5vdFJlZ2lzdGVyZWQAAAAAAAAIAAAAAAAAABBBdHRlc3RvckRpc2FibGVkAAAACQAAAAAAAAAVRXZpZGVuY2VBbHJlYWR5RXhpc3RzAAAAAAAACgAAAAAAAAAQRXZpZGVuY2VOb3RGb3VuZAAAAAsAAAAAAAAAEUV2aWRlbmNlTm90QWN0aXZlAAAAAAAADAAAAAAAAAATSW52YWxpZFN1cGVyc2Vzc2lvbgAAAAANAAAAAAAAABRBZG1pblByb3Bvc2FsTWlzc2luZwAAAA4AAAAAAAAAEVVwZ3JhZGVOb3RBbGxvd2VkAAAAAAAADw==",
@@ -273,6 +281,7 @@ export class Client extends ContractClient {
         register_attestor: this.txFromJSON<Result<void>>,
         supersede_evidence: this.txFromJSON<Result<Buffer>>,
         set_attestor_enabled: this.txFromJSON<Result<void>>,
+        cancel_admin_transfer: this.txFromJSON<Result<void>>,
         maintain_supersession_chain: this.txFromJSON<Result<void>>
   }
 }

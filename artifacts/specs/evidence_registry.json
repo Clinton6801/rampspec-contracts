@@ -29,6 +29,31 @@
       "data_format": "map",
       "doc": "",
       "lib": "",
+      "name": "AdminProposalCancelled",
+      "params": [
+        {
+          "doc": "",
+          "location": "topic_list",
+          "name": "current_admin",
+          "type": "address"
+        },
+        {
+          "doc": "",
+          "location": "topic_list",
+          "name": "cancelled_admin",
+          "type": "address"
+        }
+      ],
+      "prefix_topics": [
+        "admin_proposal_cancelled"
+      ]
+    }
+  },
+  {
+    "event_v0": {
+      "data_format": "map",
+      "doc": "",
+      "lib": "",
       "name": "AdminProposed",
       "params": [
         {
@@ -309,6 +334,25 @@
       "doc": "",
       "inputs": [],
       "name": "accept_admin",
+      "outputs": [
+        {
+          "result": {
+            "error_type": {
+              "udt": {
+                "name": "ContractError"
+              }
+            },
+            "ok_type": "void"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "function_v0": {
+      "doc": "",
+      "inputs": [],
+      "name": "cancel_admin_transfer",
       "outputs": [
         {
           "result": {

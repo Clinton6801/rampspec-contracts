@@ -1,6 +1,6 @@
 use evidence_registry::{
-    AdminChanged, AdminProposed, AttestorSet, EvidencePublished, EvidenceRevoked,
-    EvidenceSuperseded, Initialized, PauseChanged, Upgraded,
+    AdminChanged, AdminProposalCancelled, AdminProposed, AttestorSet, EvidencePublished,
+    EvidenceRevoked, EvidenceSuperseded, Initialized, PauseChanged, Upgraded,
 };
 use soroban_sdk::{
     Address, BytesN, Env, FromVal, Map, Symbol, TryFromVal, Val, events::Event,
@@ -67,10 +67,20 @@ fn administrative_event_schemas_are_stable() {
     assert_schema(
         &env,
         &AdminChanged {
-            old_admin: admin,
-            new_admin: next_admin,
+            old_admin: admin.clone(),
+            new_admin: next_admin.clone(),
         },
         "admin_changed",
+        3,
+        &[],
+    );
+    assert_schema(
+        &env,
+        &AdminProposalCancelled {
+            current_admin: admin,
+            cancelled_admin: next_admin,
+        },
+        "admin_proposal_cancelled",
         3,
         &[],
     );
