@@ -1,8 +1,11 @@
 use evidence_registry::{EvidenceRegistry, EvidenceRegistryClient};
 use rampspec_shared_types::{
-    EvidenceInput, NetworkKind, SCHEMA_VERSION, SUPPORTED_PROTOCOL_BITMAP,
+    EVIDENCE_ID_DOMAIN, EvidenceInput, NetworkKind, PersistentKeyV1, SCHEMA_VERSION,
+    SUPPORTED_PROTOCOL_BITMAP,
 };
-use soroban_sdk::{Address, BytesN, Env, testutils::Address as _, testutils::Ledger as _};
+use soroban_sdk::{
+    Address, Bytes, BytesN, Env, testutils::Address as _, testutils::Ledger as _, xdr::ToXdr,
+};
 
 fn input(env: &Env, publisher: &Address, marker: u8) -> EvidenceInput {
     EvidenceInput {
@@ -45,6 +48,20 @@ fn assert_budget(env: &Env, cpu_max: u64, memory_max: u64) {
     );
 }
 
+fn evidence_id(
+    env: &Env,
+    publisher: &Address,
+    report_hash: &BytesN<32>,
+    network: &NetworkKind,
+) -> BytesN<32> {
+    let mut preimage = Bytes::new(env);
+    preimage.extend_from_slice(EVIDENCE_ID_DOMAIN);
+    preimage.append(&publisher.clone().to_xdr(env));
+    preimage.extend_from_slice(&report_hash.to_array());
+    preimage.extend_from_slice(&network.discriminant().to_be_bytes());
+    BytesN::from_array(env, &env.crypto().sha256(&preimage).to_array())
+}
+
 #[test]
 fn maximum_valid_publication_stays_within_reviewed_budget() {
     let (env, contract_id, publisher) = setup();
@@ -54,6 +71,39 @@ fn maximum_valid_publication_stays_within_reviewed_budget() {
     client.publish_evidence(&input(&env, &publisher, 1));
 
     assert_budget(&env, 20_000_000, 16_000_000);
+}
+
+#[test]
+fn maximum_valid_supersession_walk_stays_within_reviewed_budget() {
+    let (env, contract_id, publisher) = setup();
+    let client = EvidenceRegistryClient::new(&env, &contract_id);
+    let current = client.publish_evidence(&input(&env, &publisher, 1));
+    let replacement = input(&env, &publisher, 2);
+    let replacement_id = evidence_id(
+        &env,
+        &replacement.publisher,
+        &replacement.report_hash,
+        &replacement.network,
+    );
+    env.as_contract(&contract_id, || {
+        let mut cursor = replacement_id;
+        for marker in 1..=24_u8 {
+            let next = BytesN::from_array(&env, &[100 + marker; 32]);
+            env.storage()
+                .persistent()
+                .set(&PersistentKeyV1::SupersededBy(cursor), &next);
+            cursor = next;
+        }
+    });
+    env.cost_estimate().budget().reset_tracker();
+
+    client.supersede_evidence(&current, &replacement, &publisher);
+
+    let resources = env.cost_estimate().resources();
+    assert!(resources.instructions <= 1_250_000);
+    assert!(resources.mem_bytes <= 140_000);
+    assert!(resources.memory_read_entries <= 40);
+    assert!(resources.write_entries <= 7);
 }
 
 #[test]

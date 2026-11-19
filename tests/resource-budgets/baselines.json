@@ -20,7 +20,7 @@
       "schema_version": { "cpuMax": 2000000, "memoryMax": 2000000, "storageWritesMax": 0, "eventsMax": 0, "ttl": "none" },
       "set_attestor_enabled": { "cpuMax": 15000000, "memoryMax": 12000000, "storageWritesMax": 1, "eventsMax": 1, "ttl": "persistent" },
       "set_paused": { "cpuMax": 10000000, "memoryMax": 8000000, "storageWritesMax": 1, "eventsMax": 1, "ttl": "instance" },
-      "supersede_evidence": { "cpuMax": 30000000, "memoryMax": 24000000, "storageWritesMax": 5, "eventsMax": 2, "ttl": "persistent" },
+      "supersede_evidence": { "cpuMax": 30000000, "memoryMax": 24000000, "storageWritesMax": 5, "eventsMax": 1, "ttl": "persistent" },
       "upgrade": { "cpuMax": 15000000, "memoryMax": 12000000, "storageWritesMax": 1, "eventsMax": 1, "ttl": "instance" }
     },
     "policy_account_fixture.wasm": {
