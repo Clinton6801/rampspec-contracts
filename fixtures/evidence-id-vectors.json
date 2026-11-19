@@ -1,5 +1,6 @@
 {
   "schemaVersion": 1,
+  "hashAlgorithm": "sha256",
   "domain": "rampspec-evidence-v1",
   "domainHex": "72616d70737065632d65766964656e63652d7631",
   "publisherAddressEncoding": "stellar-soroban-scval-xdr",

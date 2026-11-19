@@ -15,6 +15,7 @@ const vectors = JSON.parse(
   readFileSync(new URL("../../../../fixtures/evidence-id-vectors.json", import.meta.url), "utf8"),
 );
 assert.equal(vectors.schemaVersion, 1);
+assert.equal(vectors.hashAlgorithm, "sha256");
 assert.equal(vectors.domain, "rampspec-evidence-v1");
 assert.equal(vectors.publisherAddressEncoding, "stellar-soroban-scval-xdr");
 assert.equal(vectors.networkEncoding, "u32-big-endian");
