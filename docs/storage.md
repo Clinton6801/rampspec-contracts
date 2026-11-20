@@ -12,6 +12,8 @@ The `PersistentKeyV1` namespace stores attestors by address, evidence by its 32-
 
 A successful supersession commits the terminal old record, active replacement record, old-index removal, replacement-index insertion, and forward link before emitting exactly one `evidence_superseded` event. Its indexed topics are the old and new identifiers and its data contains the authorizer. Publisher- and administrator-authorized replacements use the same order. Any rejected replacement rolls the transaction back and emits no event.
 
+Revocation removes the active lookup only when it still points to the record being revoked, so a conflicting record is never erased. Administrator-authorized evidence maintenance recreates a missing active lookup for an active record and rejects a conflicting lookup before extending any TTL.
+
 ## Compatibility Policy
 
 New optional indexes may use a newly named key variant. Existing key encodings and stored value meanings are immutable. A value-shape change requires an explicit new version and migration tooling; incompatible evidence interpretation requires a new contract deployment and migration index rather than in-place reinterpretation.
