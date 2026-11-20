@@ -2,8 +2,9 @@
 
 use evidence_registry::{EvidenceRegistry, EvidenceRegistryClient};
 use libfuzzer_sys::fuzz_target;
-use rampspec_shared_types::{EvidenceInput, NetworkKind, SCHEMA_VERSION};
-use soroban_sdk::{Address, BytesN, Env, testutils::Address as _};
+use rampspec_shared_types::{ContractError, EvidenceInput, NetworkKind, SCHEMA_VERSION};
+use soroban_sdk::{Address, BytesN, Env, testutils::Address as _, testutils::Events as _};
+use std::vec::Vec;
 
 fn input(env: &Env, publisher: &Address, report_byte: u8) -> EvidenceInput {
     EvidenceInput {
@@ -32,34 +33,57 @@ fuzz_target!(|data: &[u8]| {
     let client = EvidenceRegistryClient::new(&env, &contract_id);
     client.initialize(&admin, &SCHEMA_VERSION);
     client.register_attestor(&publisher, &BytesN::from_array(&env, &[9; 32]));
-    let mut active = None;
+    let mut known_ids = Vec::new();
 
-    for (index, action) in data.iter().take(32).enumerate() {
-        match action % 4 {
+    for action in data.chunks(3).take(32) {
+        let opcode = action[0];
+        let selector = action.get(1).copied().unwrap_or_default();
+        let report_byte = action.get(2).copied().unwrap_or_default().max(1);
+        match opcode % 4 {
             0 => {
-                let evidence = input(&env, &publisher, u8::try_from(index + 1).unwrap());
+                let evidence = input(&env, &publisher, report_byte);
                 if let Ok(Ok(id)) = client.try_publish_evidence(&evidence) {
-                    active = Some(id);
+                    known_ids.push(id);
                 }
             }
             1 => {
-                let _ = client.try_set_paused(&(action & 0x80 != 0));
+                let _ = client.try_set_paused(&(opcode & 0x80 != 0));
             }
             2 => {
-                if let Some(id) = active.clone() {
+                if !known_ids.is_empty() {
+                    let id = known_ids[usize::from(selector) % known_ids.len()].clone();
                     let reason = BytesN::from_array(&env, &[7; 32]);
-                    if client.try_revoke_evidence(&id, &reason, &publisher).is_ok() {
-                        active = None;
-                    }
+                    let _ = client.try_revoke_evidence(&id, &reason, &publisher);
                 }
             }
             _ => {
-                if let Some(id) = active.clone() {
-                    let replacement = input(&env, &publisher, u8::try_from(index + 100).unwrap());
-                    if let Ok(Ok(next_id)) =
-                        client.try_supersede_evidence(&id, &replacement, &publisher)
-                    {
-                        active = Some(next_id);
+                let old_id = if known_ids.is_empty() || selector & 1 == 0 {
+                    BytesN::from_array(&env, &[selector.max(1); 32])
+                } else {
+                    known_ids[usize::from(selector) % known_ids.len()].clone()
+                };
+                let replacement = input(&env, &publisher, report_byte);
+                let before: Vec<_> = known_ids
+                    .iter()
+                    .map(|id| (id.clone(), client.get_evidence(id)))
+                    .collect();
+                let result = client.try_supersede_evidence(&old_id, &replacement, &publisher);
+                match result {
+                    Ok(Ok(next_id)) => known_ids.push(next_id),
+                    rejected => {
+                        for (id, record) in before {
+                            assert_eq!(client.get_evidence(&id), record);
+                        }
+                        assert_eq!(env.events().all().events().len(), 0);
+                        assert!(matches!(
+                            rejected,
+                            Err(Ok(ContractError::EvidenceNotFound
+                                | ContractError::EvidenceNotActive
+                                | ContractError::EvidenceAlreadyExists
+                                | ContractError::InvalidSupersession
+                                | ContractError::Paused))
+                                | Err(Err(_))
+                        ));
                     }
                 }
             }

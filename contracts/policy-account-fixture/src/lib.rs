@@ -6,7 +6,10 @@
     clippy::large_enum_variant
 )]
 
-use p256::{AffinePoint, EncodedPoint, elliptic_curve::sec1::FromEncodedPoint};
+use p256::{
+    AffinePoint, EncodedPoint, ecdsa::Signature as P256Signature,
+    elliptic_curve::sec1::FromEncodedPoint,
+};
 use soroban_sdk::{
     Address, Bytes, BytesN, Env, Symbol, Vec,
     auth::{Context, CustomAccountInterface},
@@ -235,6 +238,15 @@ fn passkey_signer_weight(config: &PolicyConfig, public_key: &BytesN<65>) -> Opti
         .map(|signer| signer.weight)
 }
 
+fn validate_canonical_passkey_signature(signature: &BytesN<64>) -> Result<(), PolicyError> {
+    let parsed = P256Signature::from_slice(&signature.to_array())
+        .map_err(|_| PolicyError::InvalidPasskey)?;
+    if parsed.normalize_s().is_some() {
+        return Err(PolicyError::InvalidPasskey);
+    }
+    Ok(())
+}
+
 #[contractimpl]
 impl PolicyAccountFixture {
     pub fn initialize(
@@ -402,6 +414,7 @@ impl CustomAccountInterface for PolicyAccountFixture {
                     {
                         return Err(PolicyError::InvalidPasskey);
                     }
+                    validate_canonical_passkey_signature(&signature.signature)?;
                     if seen.contains(&signature.public_key) {
                         return Err(PolicyError::DuplicateSigner);
                     }
@@ -501,6 +514,29 @@ mod tests {
             challenge: BytesN::from_array(env, payload),
             signature: BytesN::from_array(env, &signature_bytes),
         })
+    }
+
+    fn high_s_signature(signature: &[u8; 64]) -> [u8; 64] {
+        const P256_ORDER: [u8; 32] = [
+            0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2,
+            0xfc, 0x63, 0x25, 0x51,
+        ];
+        let mut high = [0_u8; 64];
+        high[..32].copy_from_slice(&signature[..32]);
+        let mut borrow = 0_i16;
+        for index in (0..32).rev() {
+            let difference =
+                i16::from(P256_ORDER[index]) - i16::from(signature[32 + index]) - borrow;
+            if difference < 0 {
+                high[32 + index] = u8::try_from(difference + 256).unwrap();
+                borrow = 1;
+            } else {
+                high[32 + index] = u8::try_from(difference).unwrap();
+                borrow = 0;
+            }
+        }
+        high
     }
 
     fn check(
@@ -895,6 +931,74 @@ mod tests {
         assert_eq!(
             check(&env, &contract_id, &payload, &vec![&env, altered]),
             Err(Ok(PolicyError::InvalidPasskey))
+        );
+        assert_eq!(
+            check(
+                &env,
+                &contract_id,
+                &payload,
+                &vec![&env, passkey_signature(&env, &passkey, &payload)]
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn passkey_mode_rejects_high_s_and_malformed_scalars_without_replay_markers() {
+        let env = Env::default();
+        let bootstrap = key(1);
+        let bootstrap_signers = vec![&env, signer(&env, &bootstrap, 1)];
+        let passkey = passkey_key(3);
+        let passkeys = vec![&env, passkey_signer(&env, &passkey, 1)];
+        env.mock_all_auths();
+        let contract_id = env.register(PolicyAccountFixture, ());
+        let admin = Address::generate(&env);
+        let client = PolicyAccountFixtureClient::new(&env, &contract_id);
+        client.initialize(&admin, &bootstrap_signers, &1);
+        client.set_passkeys(&passkeys, &1);
+
+        let high_s_payload = [19; 32];
+        let mut high_s = passkey_signature(&env, &passkey, &high_s_payload);
+        if let AccountSignature::Passkey(assertion) = &mut high_s {
+            assertion.signature =
+                BytesN::from_array(&env, &high_s_signature(&assertion.signature.to_array()));
+        }
+        assert_eq!(
+            check(&env, &contract_id, &high_s_payload, &vec![&env, high_s]),
+            Err(Ok(PolicyError::InvalidPasskey))
+        );
+        assert_eq!(
+            check(
+                &env,
+                &contract_id,
+                &high_s_payload,
+                &vec![&env, passkey_signature(&env, &passkey, &high_s_payload)]
+            ),
+            Ok(())
+        );
+
+        let malformed_payload = [20; 32];
+        let mut malformed = passkey_signature(&env, &passkey, &malformed_payload);
+        if let AccountSignature::Passkey(assertion) = &mut malformed {
+            assertion.signature = BytesN::from_array(&env, &[0; 64]);
+        }
+        assert_eq!(
+            check(
+                &env,
+                &contract_id,
+                &malformed_payload,
+                &vec![&env, malformed]
+            ),
+            Err(Ok(PolicyError::InvalidPasskey))
+        );
+        assert_eq!(
+            check(
+                &env,
+                &contract_id,
+                &malformed_payload,
+                &vec![&env, passkey_signature(&env, &passkey, &malformed_payload)]
+            ),
+            Ok(())
         );
     }
 
