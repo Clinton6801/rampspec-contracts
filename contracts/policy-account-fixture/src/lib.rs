@@ -6,6 +6,7 @@
     clippy::large_enum_variant
 )]
 
+use p256::{AffinePoint, EncodedPoint, elliptic_curve::sec1::FromEncodedPoint};
 use soroban_sdk::{
     Address, Bytes, BytesN, Env, Symbol, Vec,
     auth::{Context, CustomAccountInterface},
@@ -144,10 +145,11 @@ fn validate_passkey_policy(
     let mut total_weight = 0_u32;
     let mut seen = Vec::<BytesN<65>>::new(signers.env());
     for signer in signers.iter() {
-        if signer.weight == 0
-            || signer.public_key.get(0).unwrap() != 4
-            || seen.contains(&signer.public_key)
-        {
+        let encoded = EncodedPoint::from_bytes(signer.public_key.to_array());
+        let valid_point = encoded
+            .ok()
+            .is_some_and(|point| bool::from(AffinePoint::from_encoded_point(&point).is_some()));
+        if signer.weight == 0 || !valid_point || seen.contains(&signer.public_key) {
             return Err(PolicyError::InvalidPolicy);
         }
         seen.push_back(signer.public_key);
@@ -894,5 +896,35 @@ mod tests {
             check(&env, &contract_id, &payload, &vec![&env, altered]),
             Err(Ok(PolicyError::InvalidPasskey))
         );
+    }
+
+    #[test]
+    fn passkey_policy_rejects_malformed_and_off_curve_public_keys() {
+        let env = Env::default();
+        let bootstrap = key(1);
+        let bootstrap_signers = vec![&env, signer(&env, &bootstrap, 1)];
+        env.mock_all_auths();
+        let contract_id = env.register(PolicyAccountFixture, ());
+        let admin = Address::generate(&env);
+        let client = PolicyAccountFixtureClient::new(&env, &contract_id);
+        client.initialize(&admin, &bootstrap_signers, &1);
+
+        for bytes in [[0_u8; 65], [4_u8; 65]] {
+            let invalid = vec![
+                &env,
+                PasskeySigner {
+                    public_key: BytesN::from_array(&env, &bytes),
+                    weight: 1,
+                },
+            ];
+            assert_eq!(
+                client.try_set_passkeys(&invalid, &1),
+                Err(Ok(PolicyError::InvalidPolicy))
+            );
+            assert_eq!(
+                client.config().signature_mode,
+                super::SignatureMode::Ed25519
+            );
+        }
     }
 }
