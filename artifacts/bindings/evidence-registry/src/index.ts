@@ -283,5 +283,6 @@ export class Client extends ContractClient {
         set_attestor_enabled: this.txFromJSON<Result<void>>,
         cancel_admin_transfer: this.txFromJSON<Result<void>>,
         maintain_supersession_chain: this.txFromJSON<Result<void>>
+        cancel_admin_transfer: this.txFromJSON<Result<void>>
   }
 }

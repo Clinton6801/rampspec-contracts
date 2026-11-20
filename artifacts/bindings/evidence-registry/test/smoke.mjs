@@ -33,3 +33,4 @@ for (const vector of vectors.vectors) {
   assert.equal(preimage.toString("hex"), vector.preimageHex);
   assert.equal(createHash("sha256").update(preimage).digest("hex"), vector.evidenceIdHex);
 }
+assert.deepEqual(Object.keys(client.fromJSON).sort(), ["accept_admin","cancel_admin_transfer","get_attestor","get_evidence","initialize","is_active","maintain_attestor","maintain_evidence","propose_admin","publish_evidence","register_attestor","revoke_evidence","schema_version","set_attestor_enabled","set_paused","supersede_evidence","upgrade"]);

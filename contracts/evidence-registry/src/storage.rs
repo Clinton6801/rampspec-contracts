@@ -234,6 +234,27 @@ pub(crate) fn maintain_evidence(env: &Env, id: &BytesN<32>) -> Result<(), Contra
             }
         }
         EvidenceStatus::Superseded | EvidenceStatus::Revoked => {}
+    if record.status == rampspec_shared_types::EvidenceStatus::Active {
+        match active_id(env, &record.publisher, &record.report_hash, &record.network) {
+            Some(indexed_id) if indexed_id != *id => {
+                return Err(ContractError::EvidenceAlreadyExists);
+            }
+            Some(_) => extend_persistent_ttl(
+                env,
+                &PersistentKeyV1::ActiveReport(
+                    record.publisher.clone(),
+                    record.report_hash.clone(),
+                    record.network.clone(),
+                ),
+            ),
+            None => set_active_id(
+                env,
+                &record.publisher,
+                &record.report_hash,
+                &record.network,
+                id,
+            ),
+        }
     }
     extend_persistent_ttl(env, &PersistentKeyV1::Evidence(id.clone()));
     if superseded_by(env, id).is_some() {

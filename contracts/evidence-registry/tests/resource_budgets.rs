@@ -112,15 +112,67 @@ fn maximum_valid_supersession_walk_stays_within_reviewed_budget() {
 fn long_replacement_chain_stays_within_reviewed_budget() {
     let (env, contract_id, publisher) = setup();
     let client = EvidenceRegistryClient::new(&env, &contract_id);
-    let mut current = client.publish_evidence(&input(&env, &publisher, 1));
-    for marker in 2..=12 {
-        current = client.supersede_evidence(&current, &input(&env, &publisher, marker), &publisher);
-    }
+    let current = client.publish_evidence(&input(&env, &publisher, 1));
+    let replacement = input(&env, &publisher, 2);
+    let replacement_id = evidence_id(
+        &env,
+        &replacement.publisher,
+        &replacement.report_hash,
+        &replacement.network,
+    );
+    env.as_contract(&contract_id, || {
+        let mut cursor = replacement_id;
+        for marker in 1..=24_u8 {
+            let next = BytesN::from_array(&env, &[100 + marker; 32]);
+            env.storage()
+                .persistent()
+                .set(&PersistentKeyV1::SupersededBy(cursor), &next);
+            cursor = next;
+        }
+    });
     env.cost_estimate().budget().reset_tracker();
 
-    client.supersede_evidence(&current, &input(&env, &publisher, 13), &publisher);
+    client.supersede_evidence(&current, &replacement, &publisher);
 
-    assert_budget(&env, 30_000_000, 24_000_000);
+    let resources = env.cost_estimate().resources();
+    assert!(resources.instructions <= 1_250_000);
+    assert!(resources.mem_bytes <= 140_000);
+    assert!(resources.memory_read_entries <= 40);
+    assert!(resources.write_entries <= 7);
+}
+
+#[test]
+fn successful_evidence_read_extends_only_instance_ttl_within_budget() {
+    let (env, contract_id, publisher) = setup();
+    let client = EvidenceRegistryClient::new(&env, &contract_id);
+    let id = client.publish_evidence(&input(&env, &publisher, 1));
+    env.ledger().set_sequence_number(2_000_000);
+    let before = env.as_contract(&contract_id, || {
+        (
+            env.storage().instance().get_ttl(),
+            env.storage()
+                .persistent()
+                .get_ttl(&PersistentKeyV1::Evidence(id.clone())),
+        )
+    });
+
+    assert!(client.get_evidence(&id).is_some());
+
+    let resources = env.cost_estimate().resources();
+    assert!(resources.instructions <= 5_000_000);
+    assert!(resources.mem_bytes <= 5_000_000);
+    assert!(resources.memory_read_entries <= 4);
+    assert!(resources.write_entries <= 2);
+    let after = env.as_contract(&contract_id, || {
+        (
+            env.storage().instance().get_ttl(),
+            env.storage()
+                .persistent()
+                .get_ttl(&PersistentKeyV1::Evidence(id)),
+        )
+    });
+    assert!(after.0 > before.0);
+    assert_eq!(after.1, before.1);
 }
 
 #[test]

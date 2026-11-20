@@ -1,5 +1,62 @@
 [
   {
+    "event_v0": {
+      "data_format": "map",
+      "doc": "",
+      "lib": "",
+      "name": "PolicyConfigurationChanged",
+      "params": [
+        {
+          "doc": "",
+          "location": "topic_list",
+          "name": "change",
+          "type": "symbol"
+        },
+        {
+          "doc": "",
+          "location": "data",
+          "name": "version",
+          "type": "u32"
+        },
+        {
+          "doc": "",
+          "location": "data",
+          "name": "policy_commitment",
+          "type": {
+            "bytes_n": {
+              "n": 32
+            }
+          }
+        },
+        {
+          "doc": "",
+          "location": "data",
+          "name": "signature_mode",
+          "type": {
+            "udt": {
+              "name": "SignatureMode"
+            }
+          }
+        },
+        {
+          "doc": "",
+          "location": "data",
+          "name": "signer_count",
+          "type": "u32"
+        },
+        {
+          "doc": "",
+          "location": "data",
+          "name": "threshold",
+          "type": "u32"
+        }
+      ],
+      "prefix_topics": [
+        "policy_configuration_changed"
+      ]
+    }
+  },
+  {
     "function_v0": {
       "doc": "",
       "inputs": [
@@ -72,6 +129,25 @@
                 "name": "PolicyConfig"
               }
             }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "function_v0": {
+      "doc": "",
+      "inputs": [],
+      "name": "config_version",
+      "outputs": [
+        {
+          "result": {
+            "error_type": {
+              "udt": {
+                "name": "PolicyError"
+              }
+            },
+            "ok_type": "u32"
           }
         }
       ]
@@ -421,6 +497,11 @@
           "doc": "",
           "name": "InvalidPasskey",
           "value": 16
+        },
+        {
+          "doc": "",
+          "name": "TooManySignatures",
+          "value": 17
         }
       ],
       "doc": "",

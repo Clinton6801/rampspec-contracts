@@ -16,5 +16,6 @@ Use administrator-authorized `maintain_supersession_chain` with the first supers
 ## Evidence ID Compatibility
 
 SDK authors can reproduce evidence IDs without invoking the contract. The version-1 synthetic vectors are published in `fixtures/evidence-id-vectors.json`. The preimage is the ASCII domain `rampspec-evidence-v1`, the Stellar Soroban `ScVal::Address` XDR for the publisher, the 32-byte report hash, and the network discriminant encoded as a big-endian `u32`; SHA-256 produces the evidence ID.
+The operator maintenance service must inspect and refresh live entries at least every 30 days using `maintain_attestor` and `maintain_evidence`; calls are administrator-authorized and fail for unknown entries. Evidence maintenance validates the active uniqueness index before any TTL change, repairs a missing index for an active record, rejects a conflicting index, and refreshes the forward supersession link where applicable.
 
 Maintenance cannot restore an archived entry from inside the contract. Operators must submit the network restore-footprint transaction first, then call maintenance. Contract events and signed release/deployment manifests are the recovery source if an indexer cache is lost. Alert at 45 days remaining, escalate at 30 days, and freeze new publication if the instance drops below 14 days without a successful extension.

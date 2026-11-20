@@ -13,8 +13,9 @@ use p256::{
 use soroban_sdk::{
     Address, Bytes, BytesN, Env, Symbol, Vec,
     auth::{Context, CustomAccountInterface},
-    contract, contracterror, contractimpl, contracttype,
+    contract, contracterror, contractevent, contractimpl, contracttype,
     crypto::Hash,
+    xdr::ToXdr,
 };
 
 const MAX_SIGNERS: u32 = 16;
@@ -41,6 +42,7 @@ pub enum PolicyError {
     InvalidContext = 14,
     WrongSignatureMode = 15,
     InvalidPasskey = 16,
+    TooManySignatures = 17,
 }
 
 #[contracttype]
@@ -113,7 +115,20 @@ pub struct PolicyControls {
 #[contracttype]
 enum DataKey {
     Config,
+    ConfigVersion,
     UsedPayload(BytesN<32>),
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolicyConfigurationChanged {
+    #[topic]
+    pub change: Symbol,
+    pub version: u32,
+    pub policy_commitment: BytesN<32>,
+    pub signature_mode: SignatureMode,
+    pub signer_count: u32,
+    pub threshold: u32,
 }
 
 #[contract]
@@ -173,6 +188,35 @@ fn read_config(env: &Env) -> Result<PolicyConfig, PolicyError> {
         .instance()
         .get(&DataKey::Config)
         .ok_or(PolicyError::NotInitialized)
+}
+
+fn store_config(env: &Env, config: &PolicyConfig, change: &str) -> Result<(), PolicyError> {
+    let version = env
+        .storage()
+        .instance()
+        .get::<_, u32>(&DataKey::ConfigVersion)
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or(PolicyError::InvalidPolicy)?;
+    let signer_count = match config.signature_mode {
+        SignatureMode::Ed25519 => config.signers.len(),
+        SignatureMode::PasskeyCompatible => config.passkey_signers.len(),
+    };
+    let policy_commitment = env.crypto().sha256(&config.clone().to_xdr(env)).to_bytes();
+    env.storage().instance().set(&DataKey::Config, config);
+    env.storage()
+        .instance()
+        .set(&DataKey::ConfigVersion, &version);
+    PolicyConfigurationChanged {
+        change: Symbol::new(env, change),
+        version,
+        policy_commitment,
+        signature_mode: config.signature_mode,
+        signer_count,
+        threshold: config.threshold,
+    }
+    .publish(env);
+    Ok(())
 }
 
 fn default_controls() -> PolicyControls {
@@ -262,8 +306,8 @@ impl PolicyAccountFixture {
         }
         validate_policy(&signers, threshold)?;
         admin.require_auth();
-        env.storage().instance().set(
-            &DataKey::Config,
+        store_config(
+            &env,
             &PolicyConfig {
                 admin,
                 signers,
@@ -272,8 +316,8 @@ impl PolicyAccountFixture {
                 signature_mode: SignatureMode::Ed25519,
                 controls: default_controls(),
             },
-        );
-        Ok(())
+            "initialize",
+        )
     }
 
     pub fn set_signers(
@@ -282,14 +326,20 @@ impl PolicyAccountFixture {
         threshold: u32,
     ) -> Result<(), PolicyError> {
         validate_policy(&signers, threshold)?;
-        let mut config = read_config(&env)?;
+        let config = read_config(&env)?;
         config.admin.require_auth();
-        config.signers = signers;
-        config.passkey_signers = Vec::new(&env);
-        config.threshold = threshold;
-        config.signature_mode = SignatureMode::Ed25519;
-        env.storage().instance().set(&DataKey::Config, &config);
-        Ok(())
+        let next = PolicyConfig {
+            admin: config.admin.clone(),
+            signers,
+            passkey_signers: Vec::new(&env),
+            threshold,
+            signature_mode: SignatureMode::Ed25519,
+            controls: config.controls.clone(),
+        };
+        if next == config {
+            return Ok(());
+        }
+        store_config(&env, &next, "set_signers")
     }
 
     pub fn set_passkeys(
@@ -298,28 +348,46 @@ impl PolicyAccountFixture {
         threshold: u32,
     ) -> Result<(), PolicyError> {
         validate_passkey_policy(&signers, threshold)?;
-        let mut config = read_config(&env)?;
+        let config = read_config(&env)?;
         config.admin.require_auth();
-        config.signers = Vec::new(&env);
-        config.passkey_signers = signers;
-        config.threshold = threshold;
-        config.signature_mode = SignatureMode::PasskeyCompatible;
-        config.controls.additional_signer = None;
-        env.storage().instance().set(&DataKey::Config, &config);
-        Ok(())
+        let mut controls = config.controls.clone();
+        controls.additional_signer = None;
+        let next = PolicyConfig {
+            admin: config.admin.clone(),
+            signers: Vec::new(&env),
+            passkey_signers: signers,
+            threshold,
+            signature_mode: SignatureMode::PasskeyCompatible,
+            controls,
+        };
+        if next == config {
+            return Ok(());
+        }
+        store_config(&env, &next, "set_passkeys")
     }
 
     pub fn set_controls(env: Env, controls: PolicyControls) -> Result<(), PolicyError> {
         validate_controls(&controls)?;
         let mut config = read_config(&env)?;
         config.admin.require_auth();
+        if config.controls == controls {
+            return Ok(());
+        }
         config.controls = controls;
-        env.storage().instance().set(&DataKey::Config, &config);
-        Ok(())
+        store_config(&env, &config, "set_controls")
     }
 
     pub fn config(env: Env) -> Result<PolicyConfig, PolicyError> {
         read_config(&env)
+    }
+
+    pub fn config_version(env: Env) -> Result<u32, PolicyError> {
+        read_config(&env)?;
+        Ok(env
+            .storage()
+            .instance()
+            .get(&DataKey::ConfigVersion)
+            .unwrap_or(0))
     }
 
     #[must_use]
@@ -369,6 +437,9 @@ impl CustomAccountInterface for PolicyAccountFixture {
         if signatures.is_empty() {
             return Err(PolicyError::MissingSignature);
         }
+        if signatures.len() > MAX_SIGNERS {
+            return Err(PolicyError::TooManySignatures);
+        }
 
         match config.signature_mode {
             SignatureMode::Ed25519 => {
@@ -410,6 +481,10 @@ impl CustomAccountInterface for PolicyAccountFixture {
                     let AccountSignature::Passkey(signature) = envelope else {
                         return Err(PolicyError::WrongSignatureMode);
                     };
+                    if seen.contains(&signature.public_key) {
+                        return Err(PolicyError::DuplicateSigner);
+                    }
+                    seen.push_back(signature.public_key.clone());
                     if signature.challenge != payload_hash
                         || signature.authenticator_data.len() < MIN_AUTHENTICATOR_DATA_LENGTH
                         || signature.authenticator_data.len() > MAX_AUTHENTICATOR_DATA_LENGTH
@@ -417,10 +492,6 @@ impl CustomAccountInterface for PolicyAccountFixture {
                         return Err(PolicyError::InvalidPasskey);
                     }
                     validate_canonical_passkey_signature(&signature.signature)?;
-                    if seen.contains(&signature.public_key) {
-                        return Err(PolicyError::DuplicateSigner);
-                    }
-                    seen.push_back(signature.public_key.clone());
                     let weight = passkey_signer_weight(&config, &signature.public_key)
                         .ok_or(PolicyError::UnauthorizedSigner)?;
                     let mut signed_message = signature.authenticator_data.clone();
@@ -453,17 +524,19 @@ mod tests {
     extern crate std;
 
     use super::{
-        AccountSignature, Ed25519Signature, Ed25519Signer, PasskeySignature, PasskeySigner,
-        PolicyAccountFixture, PolicyAccountFixtureClient, PolicyControls, PolicyError,
+        AccountSignature, Ed25519Signature, Ed25519Signer, MAX_SIGNERS, PasskeySignature,
+        PasskeySigner, PolicyAccountFixture, PolicyAccountFixtureClient, PolicyControls,
+        PolicyError,
     };
     use ed25519_dalek::{Signer as _, SigningKey};
     use p256::ecdsa::{
         Signature as P256Signature, SigningKey as P256SigningKey, signature::hazmat::PrehashSigner,
     };
+    use proptest::prelude::*;
     use soroban_sdk::{
         Address, Bytes, BytesN, Env, IntoVal, Symbol, Vec,
         auth::{Context, ContractContext},
-        testutils::{Address as _, Ledger as _},
+        testutils::{Address as _, Events as _, Ledger as _},
         vec,
     };
 
@@ -1100,6 +1173,227 @@ mod tests {
                 ),
                 Ok(())
             );
+        }
+    }
+
+    #[test]
+    fn ed25519_signature_count_is_bounded_before_iteration() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PolicyAccountFixture, ());
+        let admin = Address::generate(&env);
+        let payload = [21; 32];
+        let mut signers = Vec::new(&env);
+        let mut signatures = Vec::new(&env);
+        for seed in 1..=MAX_SIGNERS {
+            let signing_key = key(u8::try_from(seed).unwrap());
+            signers.push_back(signer(&env, &signing_key, 1));
+            signatures.push_back(signature(&env, &signing_key, &payload));
+        }
+        let client = PolicyAccountFixtureClient::new(&env, &contract_id);
+        client.initialize(&admin, &signers, &MAX_SIGNERS);
+
+        let mut over_limit = signatures.clone();
+        over_limit.push_back(signatures.get(0).unwrap());
+        assert_eq!(
+            check(&env, &contract_id, &payload, &over_limit),
+            Err(Ok(PolicyError::TooManySignatures))
+        );
+        assert_eq!(check(&env, &contract_id, &payload, &signatures), Ok(()));
+    }
+
+    #[test]
+    fn passkey_signature_count_is_bounded_before_iteration() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PolicyAccountFixture, ());
+        let admin = Address::generate(&env);
+        let bootstrap = key(1);
+        let payload = [22; 32];
+        let mut signers = Vec::new(&env);
+        let mut signatures = Vec::new(&env);
+        for seed in 1..=MAX_SIGNERS {
+            let signing_key = passkey_key(u8::try_from(seed).unwrap());
+            signers.push_back(passkey_signer(&env, &signing_key, 1));
+            signatures.push_back(passkey_signature(&env, &signing_key, &payload));
+        }
+        let client = PolicyAccountFixtureClient::new(&env, &contract_id);
+        client.initialize(&admin, &vec![&env, signer(&env, &bootstrap, 1)], &1);
+        client.set_passkeys(&signers, &MAX_SIGNERS);
+
+        let mut over_limit = signatures.clone();
+        over_limit.push_back(signatures.get(0).unwrap());
+        assert_eq!(
+            check(&env, &contract_id, &payload, &over_limit),
+            Err(Ok(PolicyError::TooManySignatures))
+        );
+        assert_eq!(check(&env, &contract_id, &payload, &signatures), Ok(()));
+    }
+
+    #[test]
+    fn passkey_duplicates_are_rejected_adjacent_separated_and_when_malformed() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PolicyAccountFixture, ());
+        let admin = Address::generate(&env);
+        let bootstrap = key(1);
+        let first = passkey_key(2);
+        let second = passkey_key(3);
+        let third = passkey_key(4);
+        let client = PolicyAccountFixtureClient::new(&env, &contract_id);
+        client.initialize(&admin, &vec![&env, signer(&env, &bootstrap, 1)], &1);
+        client.set_passkeys(
+            &vec![
+                &env,
+                passkey_signer(&env, &first, 1),
+                passkey_signer(&env, &second, 1),
+                passkey_signer(&env, &third, 1),
+            ],
+            &2,
+        );
+
+        for (payload, separated) in [([23; 32], false), ([24; 32], true)] {
+            let first_signature = passkey_signature(&env, &first, &payload);
+            let signatures = if separated {
+                vec![
+                    &env,
+                    first_signature.clone(),
+                    passkey_signature(&env, &second, &payload),
+                    first_signature,
+                ]
+            } else {
+                vec![&env, first_signature.clone(), first_signature]
+            };
+            assert_eq!(
+                check(&env, &contract_id, &payload, &signatures),
+                Err(Ok(PolicyError::DuplicateSigner))
+            );
+            assert_eq!(
+                check(
+                    &env,
+                    &contract_id,
+                    &payload,
+                    &vec![
+                        &env,
+                        passkey_signature(&env, &first, &payload),
+                        passkey_signature(&env, &second, &payload),
+                    ],
+                ),
+                Ok(())
+            );
+        }
+
+        let payload = [25; 32];
+        let first_signature = passkey_signature(&env, &first, &payload);
+        let mut malformed_duplicate = first_signature.clone();
+        if let AccountSignature::Passkey(assertion) = &mut malformed_duplicate {
+            assertion.challenge = BytesN::from_array(&env, &[0; 32]);
+        }
+        assert_eq!(
+            check(
+                &env,
+                &contract_id,
+                &payload,
+                &vec![&env, first_signature, malformed_duplicate],
+            ),
+            Err(Ok(PolicyError::DuplicateSigner))
+        );
+    }
+
+    #[test]
+    fn configuration_events_are_versioned_atomic_and_idempotent() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PolicyAccountFixture, ());
+        let admin = Address::generate(&env);
+        let first = key(1);
+        let signers = vec![&env, signer(&env, &first, 1)];
+        let client = PolicyAccountFixtureClient::new(&env, &contract_id);
+
+        client.initialize(&admin, &signers, &1);
+        assert_eq!(env.events().all().events().len(), 1);
+        assert_eq!(client.config_version(), 1);
+
+        client.set_signers(&signers, &1);
+        assert_eq!(env.events().all().events().len(), 0);
+        assert_eq!(client.config_version(), 1);
+
+        let before = client.config();
+        assert_eq!(
+            client.try_set_signers(&vec![&env, signer(&env, &first, 0)], &1),
+            Err(Ok(PolicyError::InvalidPolicy))
+        );
+        assert_eq!(env.events().all().events().len(), 0);
+        assert_eq!(client.config(), before);
+        assert_eq!(client.config_version(), 1);
+
+        let mut next_controls = controls();
+        next_controls.reject_all = true;
+        client.set_controls(&next_controls);
+        assert_eq!(env.events().all().events().len(), 1);
+        assert_eq!(client.config_version(), 2);
+    }
+
+    fn valid_weight_policy(weights: &[u32], threshold: u32) -> bool {
+        if threshold == 0 || weights.iter().any(|weight| *weight == 0) {
+            return false;
+        }
+        weights
+            .iter()
+            .try_fold(0_u32, |total, weight| total.checked_add(*weight))
+            .is_some_and(|total| threshold <= total)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 32, ..ProptestConfig::default() })]
+
+        #[test]
+        fn signer_weight_boundaries_match_for_ed25519_and_passkeys(
+            weights in prop::array::uniform3(prop_oneof![
+                Just(0_u32), Just(1_u32), Just(u32::MAX), any::<u32>()
+            ]),
+            threshold in prop_oneof![Just(0_u32), Just(1_u32), Just(u32::MAX), any::<u32>()],
+        ) {
+            let expected = valid_weight_policy(&weights, threshold);
+
+            let ed_env = Env::default();
+            ed_env.mock_all_auths();
+            let ed_id = ed_env.register(PolicyAccountFixture, ());
+            let ed_admin = Address::generate(&ed_env);
+            let ed_signers = vec![
+                &ed_env,
+                signer(&ed_env, &key(1), weights[0]),
+                signer(&ed_env, &key(2), weights[1]),
+                signer(&ed_env, &key(3), weights[2]),
+            ];
+            let ed_result = PolicyAccountFixtureClient::new(&ed_env, &ed_id)
+                .try_initialize(&ed_admin, &ed_signers, &threshold);
+
+            let passkey_env = Env::default();
+            passkey_env.mock_all_auths();
+            let passkey_id = passkey_env.register(PolicyAccountFixture, ());
+            let passkey_admin = Address::generate(&passkey_env);
+            let passkey_client = PolicyAccountFixtureClient::new(&passkey_env, &passkey_id);
+            let bootstrap = key(9);
+            passkey_client.initialize(
+                &passkey_admin,
+                &vec![&passkey_env, signer(&passkey_env, &bootstrap, 1)],
+                &1,
+            );
+            let passkey_signers = vec![
+                &passkey_env,
+                passkey_signer(&passkey_env, &passkey_key(1), weights[0]),
+                passkey_signer(&passkey_env, &passkey_key(2), weights[1]),
+                passkey_signer(&passkey_env, &passkey_key(3), weights[2]),
+            ];
+            let before = passkey_client.config();
+            let passkey_result = passkey_client.try_set_passkeys(&passkey_signers, &threshold);
+
+            prop_assert_eq!(ed_result.is_ok(), expected);
+            prop_assert_eq!(passkey_result.is_ok(), expected);
+            if !expected {
+                prop_assert_eq!(passkey_client.config(), before);
+            }
         }
     }
 }
