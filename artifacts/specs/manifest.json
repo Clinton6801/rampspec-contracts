@@ -12,17 +12,17 @@
     },
     "policy-account-fixture": {
       "json": "policy_account_fixture.json",
-      "jsonSha256": "9bf35c0f9a5206e35365887399d92992d01ba3c471354c533dad77469d11b3e1",
-      "sourceSha256": "287032ffe5c2748e7dc8f8d9cafe55770863c9b58b59e7ceb235e0cb4791e2c1",
+      "jsonSha256": "9dbb7f32283a84ce062f376816a88fad40128ccdbd7eda7158265ab1e3c69f4c",
+      "sourceSha256": "c1daa6ba131ced80ada358c1ec91dd6351dccbaef3a85924c0f364329f4d452d",
       "wasm": "policy_account_fixture.wasm",
-      "wasmSha256": "0f234b663aa812061234d4a0d27801e29d5ece306c1dec7064668b5427ea8a7f",
+      "wasmSha256": "c3619424de8b3a01d223ab10b706d236dbd8502c053001c4bc3ece4fd088d86b",
       "xdr": "policy_account_fixture.xdr-base64",
-      "xdrSha256": "5ed77315cf28a5d7ed0d8385e74480e1a5884000bc18c3b9dec2d9f0d13e9167"
+      "xdrSha256": "c2a6a241ab895ec62035cdbae54ab9f7ef7cce0989f5d6b543fcb5a97124ff36"
     },
     "web-auth-fixture": {
       "json": "web_auth_fixture.json",
       "jsonSha256": "55b76eecb8cbc954c990b813cbf044f460d838dc00b9887a2236d20688cee73a",
-      "sourceSha256": "71d8bcc3fe8d631f052d3ed28ae3f379ac04d9f8705469676d7636e97d80470b",
+      "sourceSha256": "71d8bcc3fe8d631f052d3de72ae3f379ac04d9f8705469676d7636e97d80470b",
       "wasm": "web_auth_fixture.wasm",
       "wasmSha256": "a08b539352f37ebb428cfa085241bd19b99578c17d08268d59a2edab77cf9b06",
       "xdr": "web_auth_fixture.xdr-base64",

@@ -49,7 +49,8 @@ export const PolicyError = {
   13: {message:"RequiredSignerMissing"},
   14: {message:"InvalidContext"},
   15: {message:"WrongSignatureMode"},
-  16: {message:"InvalidPasskey"}
+  16: {message:"InvalidPasskey"},
+  17: {message:"TooManySignatures"}
 }
 
 
@@ -102,6 +103,7 @@ export interface PasskeySignature {
   public_key: Buffer;
   signature: Buffer;
 }
+
 
 export type NetworkKind = {tag: "Testnet", values: void} | {tag: "Futurenet", values: void} | {tag: "Pubnet", values: void} | {tag: "Standalone", values: void};
 
@@ -208,6 +210,11 @@ export interface Client {
   set_passkeys: ({signers, threshold}: {signers: Array<PasskeySigner>, threshold: u32}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
 
   /**
+   * Construct and simulate a config_version transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   */
+  config_version: (options?: MethodOptions) => Promise<AssembledTransaction<Result<u32>>>
+
+  /**
    * Construct and simulate a schema_version transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    */
   schema_version: (options?: MethodOptions) => Promise<AssembledTransaction<u32>>
@@ -235,7 +242,7 @@ export class Client extends ContractClient {
   }
   constructor(public readonly options: ContractClientOptions) {
     super(
-      new ContractSpec([ "AAAABAAAAAAAAAAAAAAAC1BvbGljeUVycm9yAAAAABAAAAAAAAAADk5vdEluaXRpYWxpemVkAAAAAAABAAAAAAAAABJBbHJlYWR5SW5pdGlhbGl6ZWQAAAAAAAIAAAAAAAAADUludmFsaWRQb2xpY3kAAAAAAAADAAAAAAAAABBNaXNzaW5nU2lnbmF0dXJlAAAABAAAAAAAAAAPRHVwbGljYXRlU2lnbmVyAAAAAAUAAAAAAAAAElVuYXV0aG9yaXplZFNpZ25lcgAAAAAABgAAAAAAAAASSW5zdWZmaWNpZW50V2VpZ2h0AAAAAAAHAAAAAAAAABFJbnZhbGlkVGltZVdpbmRvdwAAAAAAAAgAAAAAAAAAC05vdFlldFZhbGlkAAAAAAkAAAAAAAAAB0V4cGlyZWQAAAAACgAAAAAAAAAIUmVqZWN0ZWQAAAALAAAAAAAAAAZSZXBsYXkAAAAAAAwAAAAAAAAAFVJlcXVpcmVkU2lnbmVyTWlzc2luZwAAAAAAAA0AAAAAAAAADkludmFsaWRDb250ZXh0AAAAAAAOAAAAAAAAABJXcm9uZ1NpZ25hdHVyZU1vZGUAAAAAAA8AAAAAAAAADkludmFsaWRQYXNza2V5AAAAAAAQ",
+      new ContractSpec([ "AAAABAAAAAAAAAAAAAAAC1BvbGljeUVycm9yAAAAABEAAAAAAAAADk5vdEluaXRpYWxpemVkAAAAAAABAAAAAAAAABJBbHJlYWR5SW5pdGlhbGl6ZWQAAAAAAAIAAAAAAAAADUludmFsaWRQb2xpY3kAAAAAAAADAAAAAAAAABBNaXNzaW5nU2lnbmF0dXJlAAAABAAAAAAAAAAPRHVwbGljYXRlU2lnbmVyAAAAAAUAAAAAAAAAElVuYXV0aG9yaXplZFNpZ25lcgAAAAAABgAAAAAAAAASSW5zdWZmaWNpZW50V2VpZ2h0AAAAAAAHAAAAAAAAABFJbnZhbGlkVGltZVdpbmRvdwAAAAAAAAgAAAAAAAAAC05vdFlldFZhbGlkAAAAAAkAAAAAAAAAB0V4cGlyZWQAAAAACgAAAAAAAAAIUmVqZWN0ZWQAAAALAAAAAAAAAAZSZXBsYXkAAAAAAAwAAAAAAAAAFVJlcXVpcmVkU2lnbmVyTWlzc2luZwAAAAAAAA0AAAAAAAAADkludmFsaWRDb250ZXh0AAAAAAAOAAAAAAAAABJXcm9uZ1NpZ25hdHVyZU1vZGUAAAAAAA8AAAAAAAAADkludmFsaWRQYXNza2V5AAAAAAAQAAAAAAAAABFUb29NYW55U2lnbmF0dXJlcwAAAAAAABE=",
         "AAAAAQAAAAAAAAAAAAAADFBvbGljeUNvbmZpZwAAAAYAAAAAAAAABWFkbWluAAAAAAAAEwAAAAAAAAAIY29udHJvbHMAAAfQAAAADlBvbGljeUNvbnRyb2xzAAAAAAAAAAAAD3Bhc3NrZXlfc2lnbmVycwAAAAPqAAAH0AAAAA1QYXNza2V5U2lnbmVyAAAAAAAAAAAAAA5zaWduYXR1cmVfbW9kZQAAAAAH0AAAAA1TaWduYXR1cmVNb2RlAAAAAAAAAAAAAAdzaWduZXJzAAAAA+oAAAfQAAAADUVkMjU1MTlTaWduZXIAAAAAAAAAAAAACXRocmVzaG9sZAAAAAAAAAQ=",
         "AAAAAQAAAAAAAAAAAAAADUVkMjU1MTlTaWduZXIAAAAAAAACAAAAAAAAAApwdWJsaWNfa2V5AAAAAAPuAAAAIAAAAAAAAAAGd2VpZ2h0AAAAAAAE",
         "AAAAAQAAAAAAAAAAAAAADVBhc3NrZXlTaWduZXIAAAAAAAACAAAAAAAAAApwdWJsaWNfa2V5AAAAAAPuAAAAQQAAAAAAAAAGd2VpZ2h0AAAAAAAE",
@@ -251,6 +258,8 @@ export class Client extends ContractClient {
         "AAAAAAAAAAAAAAAMaXNfdGVzdF9vbmx5AAAAAAAAAAEAAAAB",
         "AAAAAAAAAAAAAAAMc2V0X2NvbnRyb2xzAAAAAQAAAAAAAAAIY29udHJvbHMAAAfQAAAADlBvbGljeUNvbnRyb2xzAAAAAAABAAAD6QAAAAIAAAfQAAAAC1BvbGljeUVycm9yAA==",
         "AAAAAAAAAAAAAAAMc2V0X3Bhc3NrZXlzAAAAAgAAAAAAAAAHc2lnbmVycwAAAAPqAAAH0AAAAA1QYXNza2V5U2lnbmVyAAAAAAAAAAAAAAl0aHJlc2hvbGQAAAAAAAAEAAAAAQAAA+kAAAACAAAH0AAAAAtQb2xpY3lFcnJvcgA=",
+        "AAAABQAAAAAAAAAAAAAAGlBvbGljeUNvbmZpZ3VyYXRpb25DaGFuZ2VkAAAAAAABAAAAHHBvbGljeV9jb25maWd1cmF0aW9uX2NoYW5nZWQAAAAGAAAAAAAAAAZjaGFuZ2UAAAAAABEAAAABAAAAAAAAAAd2ZXJzaW9uAAAAAAQAAAAAAAAAAAAAABFwb2xpY3lfY29tbWl0bWVudAAAAAAAA+4AAAAgAAAAAAAAAAAAAAAOc2lnbmF0dXJlX21vZGUAAAAAB9AAAAANU2lnbmF0dXJlTW9kZQAAAAAAAAAAAAAAAAAADHNpZ25lcl9jb3VudAAAAAQAAAAAAAAAAAAAAAl0aHJlc2hvbGQAAAAAAAAEAAAAAAAAAAI=",
+        "AAAAAAAAAAAAAAAOY29uZmlnX3ZlcnNpb24AAAAAAAAAAAABAAAD6QAAAAQAAAfQAAAAC1BvbGljeUVycm9yAA==",
         "AAAAAAAAAAAAAAAOc2NoZW1hX3ZlcnNpb24AAAAAAAAAAAABAAAABA==",
         "AAAAAAAAAAAAAAARcGFzc2tleV9zdXBwb3J0ZWQAAAAAAAAAAAAAAQAAAAE=",
         "AAAAAgAAAAAAAAAAAAAAC05ldHdvcmtLaW5kAAAAAAQAAAAAAAAAAAAAAAdUZXN0bmV0AAAAAAAAAAAAAAAACUZ1dHVyZW5ldAAAAAAAAAAAAAAAAAAABlB1Ym5ldAAAAAAAAAAAAAAAAAAKU3RhbmRhbG9uZQAA",
@@ -271,6 +280,7 @@ export class Client extends ContractClient {
         is_test_only: this.txFromJSON<boolean>,
         set_controls: this.txFromJSON<Result<void>>,
         set_passkeys: this.txFromJSON<Result<void>>,
+        config_version: this.txFromJSON<Result<u32>>,
         schema_version: this.txFromJSON<u32>,
         passkey_supported: this.txFromJSON<boolean>
   }
