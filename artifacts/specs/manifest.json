@@ -3,26 +3,26 @@
   "contracts": {
     "evidence-registry": {
       "json": "evidence_registry.json",
-      "jsonSha256": "36c536eaac035df1228b810d7ef62aaba6872172b5e19da9f53217d3943f84c5",
-      "sourceSha256": "1ca00548ba2d81262ce72f886f6d219635ed3b4fa0008858b8219d39d45e8c05",
+      "jsonSha256": "adf17acbe5efff9008700ce9e9e50cb07a259559424c3570c23e948f013fab3a",
+      "sourceSha256": "8bad57c11af42f9730c7d735bf1f3ae35eedefd21928b0e903eed3c6c44756fc",
       "wasm": "evidence_registry.wasm",
       "wasmSha256": "293b8dfd5cb59bfc8771ad99d7f48832575a31c5694944204f1a29f6634f27a8",
       "xdr": "evidence_registry.xdr-base64",
-      "xdrSha256": "ee3e4e362767733cdd99d71d8c108a05029a0e712c43bd9813bda49edf6b9940"
+      "xdrSha256": "36f7e27d6f0378917e6468780daba6f23038e0a48d817189c1e33a989102bc5f"
     },
     "policy-account-fixture": {
       "json": "policy_account_fixture.json",
-      "jsonSha256": "9bf35c0f9a5206e35365887399d92992d01ba3c471354c533dad77469d11b3e1",
-      "sourceSha256": "287032ffe5c2748e7dc8f8d9cafe55770863c9b58b59e7ceb235e0cb4791e2c1",
+      "jsonSha256": "9dbb7f32283a84ce062f376816a88fad40128ccdbd7eda7158265ab1e3c69f4c",
+      "sourceSha256": "c1daa6ba131ced80ada358c1ec91dd6351dccbaef3a85924c0f364329f4d452d",
       "wasm": "policy_account_fixture.wasm",
-      "wasmSha256": "0f234b663aa812061234d4a0d27801e29d5ece306c1dec7064668b5427ea8a7f",
+      "wasmSha256": "c3619424de8b3a01d223ab10b706d236dbd8502c053001c4bc3ece4fd088d86b",
       "xdr": "policy_account_fixture.xdr-base64",
-      "xdrSha256": "5ed77315cf28a5d7ed0d8385e74480e1a5884000bc18c3b9dec2d9f0d13e9167"
+      "xdrSha256": "c2a6a241ab895ec62035cdbae54ab9f7ef7cce0989f5d6b543fcb5a97124ff36"
     },
     "web-auth-fixture": {
       "json": "web_auth_fixture.json",
       "jsonSha256": "55b76eecb8cbc954c990b813cbf044f460d838dc00b9887a2236d20688cee73a",
-      "sourceSha256": "71d8bcc3fe8d631f052d3ed28ae3f379ac04d9f8705469676d7636e97d80470b",
+      "sourceSha256": "71d8bcc3fe8d631f052d3de72ae3f379ac04d9f8705469676d7636e97d80470b",
       "wasm": "web_auth_fixture.wasm",
       "wasmSha256": "a08b539352f37ebb428cfa085241bd19b99578c17d08268d59a2edab77cf9b06",
       "xdr": "web_auth_fixture.xdr-base64",
